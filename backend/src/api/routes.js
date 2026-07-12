@@ -1,0 +1,527 @@
+'use strict';
+const express  = require('express');
+const router   = express.Router();
+const auth     = require('./middleware/auth');
+const role     = require('./middleware/roleCheck');
+const subscriptionCheck = require('./middleware/subscriptionCheck');
+const accountLimitCheck = require('./middleware/accountLimitCheck');
+
+// ── [FIX-15] Per-Route Rate Limiters ─────────────────────────────────────────
+const {
+    loginLimiter,
+    refreshLimiter,
+    listAccountsLimiter,
+    sendMessageLimiter,
+    adminLimiter,
+    campaignSendLimiter,
+} = require('../lib/RateLimiter');
+
+// ── [FIX-16] Input Validation ──────────────────────────────────────────────
+const { validate, schemas } = require('./middleware/validate');
+
+// ── [FIX-14] CSRF Token Endpoint ──────────────────────────────────────────
+const { csrfTokenRoute } = require('./middleware/csrf');
+
+// ══════════════════════════════════════════════════════
+//  CSRF Token
+// ══════════════════════════════════════════════════════
+router.get('/auth/csrf-token', csrfTokenRoute);
+
+// ══════════════════════════════════════════════════════
+//  AUTH
+// ══════════════════════════════════════════════════════
+const AuthController = require('./controllers/AuthController');
+router.post('/auth/login',           loginLimiter,   validate(schemas.login),          AuthController.login.bind(AuthController));
+router.post('/auth/refresh',         refreshLimiter, validate(schemas.refresh),         AuthController.refresh.bind(AuthController));
+router.get('/auth/verify',   auth,                                                      AuthController.verify.bind(AuthController));
+router.post('/auth/logout',  auth,                                                      AuthController.logout.bind(AuthController));
+router.post('/auth/change-password', auth, validate(schemas.changePassword),            AuthController.changePassword.bind(AuthController));
+
+router.post('/auth/mfa/setup',  auth, AuthController.setupMFA.bind(AuthController));
+router.post('/auth/mfa/verify', auth, AuthController.verifyMFA.bind(AuthController));
+router.delete('/auth/mfa',      auth, AuthController.disableMFA.bind(AuthController));
+
+// ══════════════════════════════════════════════════════
+//  SUBSCRIPTION MANAGEMENT
+// ══════════════════════════════════════════════════════
+const SubscriptionController = require('./controllers/SubscriptionController');
+
+// Admin — إدارة المشتركين
+router.post  ('/admin/subscriptions',             auth, role('admin'), SubscriptionController.createSubscriber.bind(SubscriptionController));
+router.get   ('/admin/subscriptions',             auth, role('admin'), SubscriptionController.listSubscribers.bind(SubscriptionController));
+router.get   ('/admin/subscriptions/:id',         auth, role('admin'), SubscriptionController.getSubscriber.bind(SubscriptionController));
+router.patch ('/admin/subscriptions/:id',         auth, role('admin'), SubscriptionController.updateSubscriber.bind(SubscriptionController));
+router.post  ('/admin/subscriptions/:id/extend',  auth, role('admin'), SubscriptionController.extendSubscription.bind(SubscriptionController));
+router.patch ('/admin/subscriptions/:id/status',  auth, role('admin'), SubscriptionController.setSubscriptionStatus.bind(SubscriptionController));
+router.delete('/admin/subscriptions/:id',         auth, role('admin'), SubscriptionController.deleteSubscriber.bind(SubscriptionController));
+
+// User — بيانات اشتراكي
+router.get('/subscription/me', auth, SubscriptionController.mySubscription.bind(SubscriptionController));
+
+// Admin — Subscriber Monitoring (sessions)
+router.get('/admin/subscriber-monitoring/:id/sessions', auth, role('admin'), SubscriptionController.getSubscriberSessions.bind(SubscriptionController));
+
+// ══════════════════════════════════════════════════════
+//  ADMIN — Stats
+// ══════════════════════════════════════════════════════
+const AdminController = require('./controllers/AdminController');
+router.get('/admin/stats',         auth, role('admin'), AdminController.stats.bind(AdminController));
+router.get('/admin/activity-logs', auth, role('admin'), AdminController.activityLogs.bind(AdminController));
+
+// ── Admin: حذف الحسابات الوهمية (user_id=null) ───────────────────────────────
+const { queryAll, query } = require('../lib/postgres');
+const WhatsAppManagerAdmin = require('../bot/WhatsAppManager');
+router.delete('/admin/accounts/cleanup-orphans', auth, role('admin'), async (req, res) => {
+    try {
+        const orphans = await queryAll(
+            `SELECT id FROM accounts WHERE user_id IS NULL OR user_id NOT IN (SELECT id FROM users)`
+        );
+        const ids = orphans.map(r => r.id);
+        if (ids.length === 0) return res.json({ success: true, deleted: 0, message: 'لا توجد حسابات وهمية' });
+        for (const id of ids) {
+            try { await WhatsAppManagerAdmin.fullDeleteAccount(id); } catch (_) {}
+            await query(`DELETE FROM session_data WHERE account_id = $1`, [id]).catch(() => {});
+            await query(`DELETE FROM accounts WHERE id = $1`, [id]).catch(() => {});
+        }
+        return res.json({ success: true, deleted: ids.length, ids, message: `تم حذف ${ids.length} حساب وهمي` });
+    } catch (err) {
+        return res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// ── QR Debug: حالة QR لحساب بعينه ────────────────────────────────────────────
+router.get('/admin/accounts/:id/qr-debug', auth, role('admin'), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const status = WhatsAppManagerAdmin.getQrStatus(id);
+        const isConn = WhatsAppManagerAdmin.isConnecting(id);
+        const hasSess = !!WhatsAppManagerAdmin.getSession(id);
+        res.json({ success: true, accountId: id, qrStatus: status, isConnecting: isConn, hasSession: hasSess });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// ══════════════════════════════════════════════════════
+//  ACCOUNTS
+// ══════════════════════════════════════════════════════
+const AccountController = require('./controllers/AccountController');
+router.post('/accounts',                   auth, subscriptionCheck, accountLimitCheck, AccountController.createAccount.bind(AccountController));
+router.get('/accounts',                    auth, subscriptionCheck, listAccountsLimiter, AccountController.listAccounts.bind(AccountController));
+router.get('/accounts/summary',            auth, subscriptionCheck, AccountController.getSummary.bind(AccountController));
+router.get('/accounts/:id',                auth, subscriptionCheck, AccountController.getAccountDetails.bind(AccountController));
+router.get('/accounts/:id/stats',          auth, subscriptionCheck, AccountController.getAccountStats.bind(AccountController));
+router.get('/accounts/:id/logs',           auth, subscriptionCheck, AccountController.getLogs.bind(AccountController));
+router.post('/accounts/:id/connect',       auth, subscriptionCheck, AccountController.connectAccount.bind(AccountController));
+router.get('/accounts/:id/qr-status',      auth, subscriptionCheck, AccountController.getQrStatus.bind(AccountController));
+router.post('/accounts/:id/connect-pairing', auth, subscriptionCheck, AccountController.connectWithPairing.bind(AccountController));
+router.post('/accounts/:id/reset',         auth, subscriptionCheck, AccountController.resetSession.bind(AccountController));
+router.post('/accounts/:id/disconnect',    auth, subscriptionCheck, AccountController.disconnectAccount.bind(AccountController));
+router.delete('/accounts/:id',             auth, subscriptionCheck, AccountController.deleteAccount.bind(AccountController));
+router.patch('/accounts/:id/role',         auth, subscriptionCheck, AccountController.updateRole.bind(AccountController));
+router.post('/accounts/:id/start',         auth, subscriptionCheck, AccountController.startTasks.bind(AccountController));
+router.post('/accounts/:id/stop',          auth, subscriptionCheck, AccountController.stopTasks.bind(AccountController));
+router.post('/accounts/:id/restart',       auth, subscriptionCheck, AccountController.restartTasks.bind(AccountController));
+router.post('/accounts/:id/test',          auth, subscriptionCheck, AccountController.testConnection.bind(AccountController));
+
+// ── Business API Settings ─────────────────────────────────────────────────────
+const BusinessAPIController = require('./controllers/BusinessAPIController');
+router.get ('/accounts/:id/business-api',       auth, BusinessAPIController.getSettings.bind(BusinessAPIController));
+router.post('/accounts/:id/business-api',       auth, BusinessAPIController.saveSettings.bind(BusinessAPIController));
+router.post('/accounts/:id/business-api/test',  auth, BusinessAPIController.testConnection.bind(BusinessAPIController));
+router.post('/accounts/:id/business-api/send',  auth, BusinessAPIController.sendMessage.bind(BusinessAPIController));
+
+// ── WhatsApp Webhook (بدون auth — Meta يرسل مباشرة) ─────────────────────────
+router.get ('/webhook/whatsapp/:accountId', BusinessAPIController.webhookVerify.bind(BusinessAPIController));
+router.post('/webhook/whatsapp/:accountId', BusinessAPIController.webhookReceive.bind(BusinessAPIController));
+
+
+
+const GroupController = require('./controllers/GroupController');
+
+// ── [GROUPS-LIVE] نظرة شاملة على كل المجموعات من كل الحسابات المتصلة ────────
+// ⚠️ مسارات ثابتة بدون :accountId — يجب أن تبقى منفصلة عن مسارات
+//    /accounts/:accountId/groups أدناه (لا تعارض بينها لأن البادئة مختلفة).
+router.get('/groups/live',       auth, GroupController.getLiveOverview.bind(GroupController));
+router.post('/groups/sync-all',  auth, GroupController.syncAllAccounts.bind(GroupController));
+
+router.get('/accounts/:accountId/groups',                        auth, GroupController.getGroups.bind(GroupController));
+router.get('/accounts/:accountId/groups/categories',             auth, GroupController.getGroupsByCategory.bind(GroupController));
+router.post('/accounts/:accountId/groups/sync',                  auth, GroupController.syncGroups.bind(GroupController));
+router.get('/accounts/:accountId/groups/sync-settings',          auth, GroupController.getSyncSettings.bind(GroupController));
+router.put('/accounts/:accountId/groups/sync-settings',          auth, GroupController.updateSyncSettings.bind(GroupController));
+router.get('/accounts/:accountId/groups/:groupId/members',       auth, GroupController.getGroupMembers.bind(GroupController));
+
+// ══════════════════════════════════════════════════════
+//  الجزء الخامس — نشر لأعضاء / تصدير / استثناءات
+// ══════════════════════════════════════════════════════
+router.post('/accounts/:accountId/groups/members/preview',       auth, GroupController.getMembersForPublish.bind(GroupController));
+router.post('/accounts/:accountId/groups/members/publish', sendMessageLimiter,       auth, GroupController.publishToMembers.bind(GroupController));
+router.post('/accounts/:accountId/groups/members/export-multi',  auth, GroupController.exportMultipleGroupsMembers.bind(GroupController));
+router.get('/accounts/:accountId/groups/:groupId/members/export',auth, GroupController.exportMembers.bind(GroupController));
+router.get('/accounts/:accountId/groups/saved-members',          auth, GroupController.getSavedMembers.bind(GroupController));
+router.get('/accounts/:accountId/groups/exclusions',             auth, GroupController.getExclusions.bind(GroupController));
+router.post('/accounts/:accountId/groups/exclusions',            auth, GroupController.addExclusions.bind(GroupController));
+router.delete('/accounts/:accountId/groups/exclusions',          auth, GroupController.clearExclusions.bind(GroupController));
+router.delete('/accounts/:accountId/groups/exclusions/:exclusionId', auth, GroupController.deleteExclusion.bind(GroupController));
+
+// ══════════════════════════════════════════════════════
+//  CAMPAIGNS
+// ══════════════════════════════════════════════════════
+const CampaignController = require('./controllers/CampaignController');
+router.post('/accounts/:accountId/campaigns',                   auth, CampaignController.createCampaign.bind(CampaignController));
+router.post('/accounts/:accountId/campaigns/preflight',         auth, CampaignController.preflightCheck.bind(CampaignController));
+router.post('/accounts/:accountId/campaigns/:campaignId/start', auth, CampaignController.startCampaign.bind(CampaignController));
+router.post('/accounts/:accountId/campaigns/:campaignId/pause', auth, CampaignController.pauseCampaign.bind(CampaignController));
+router.get('/accounts/:accountId/campaigns/:campaignId/stats',  auth, CampaignController.getStats.bind(CampaignController));
+router.get('/accounts/:accountId/campaigns',                    auth, CampaignController.listCampaigns.bind(CampaignController));
+
+// ══════════════════════════════════════════════════════
+//  LINKS — الجزء الثالث: نظام مراقبة الروابط المتقدم
+// ══════════════════════════════════════════════════════
+const LinkController = require('./controllers/LinkController');
+// قراءة الروابط والإحصائيات
+router.get('/accounts/:accountId/links',                      auth, LinkController.getLinks.bind(LinkController));
+router.get('/accounts/:accountId/links/stats',                auth, LinkController.getStats.bind(LinkController));
+router.get('/accounts/:accountId/links/categories',           auth, LinkController.getCategories.bind(LinkController));
+router.get('/accounts/:accountId/links/export/csv',           auth, LinkController.exportCSV.bind(LinkController));
+
+// حذف / تصنيف
+router.delete('/accounts/:accountId/links/:linkId',           auth, LinkController.deleteLink.bind(LinkController));
+router.patch('/accounts/:accountId/links/:linkId/spam',       auth, LinkController.markSpam.bind(LinkController));
+router.post('/accounts/:accountId/links/categories',          auth, async (req, res) => res.status(501).json({ success: false, error: 'Not implemented' }));
+router.patch('/accounts/:accountId/links/:linkId/categorize', auth, async (req, res) => res.status(501).json({ success: false, error: 'Not implemented' }));
+
+// انضمام تلقائي — نقطة الاتصال الجديدة (الجزء الثالث)
+router.post('/accounts/:accountId/links/auto-join/bulk',      auth, LinkController.bulkAutoJoin.bind(LinkController));
+router.get('/accounts/:accountId/links/auto-join/queue',      auth, LinkController.getJoinQueue.bind(LinkController));
+router.delete('/accounts/:accountId/links/auto-join/queue',   auth, LinkController.clearJoinQueue.bind(LinkController));
+// رابط توافقي قديم
+router.post('/accounts/:accountId/links/:linkId/auto-join',   auth, LinkController.autoJoinLinks.bind(LinkController));
+
+// محرك المراقبة
+router.get('/accounts/:accountId/links/monitor/status',       auth, LinkController.getMonitorStatus.bind(LinkController));
+
+// Link Settings
+const LinkSettingsController = require('./controllers/LinkSettingsController');
+router.get('/accounts/:accountId/link-settings/search', auth, LinkSettingsController.getSearchSettings.bind(LinkSettingsController));
+router.put('/accounts/:accountId/link-settings/search', auth, LinkSettingsController.updateSearchSettings.bind(LinkSettingsController));
+router.get('/accounts/:accountId/link-settings/join',   auth, LinkSettingsController.getJoinSettings.bind(LinkSettingsController));
+router.put('/accounts/:accountId/link-settings/join',   auth, LinkSettingsController.updateJoinSettings.bind(LinkSettingsController));
+router.post('/accounts/:accountId/link-settings/import', auth, LinkSettingsController.importLinks.bind(LinkSettingsController));
+
+// ══════════════════════════════════════════════════════
+//  LINK SCAN ENGINE — البحث التلقائي والانضمام الاحترافي
+// ══════════════════════════════════════════════════════
+const LinkScanController = require('./controllers/LinkScanController');
+
+// بدء / إيقاف / حالة الفحص
+router.post('/accounts/:accountId/links/scan/start',      auth, LinkScanController.startScan.bind(LinkScanController));
+router.post('/accounts/:accountId/links/scan/stop',       auth, LinkScanController.stopScan.bind(LinkScanController));
+router.get('/accounts/:accountId/links/scan/status',      auth, LinkScanController.getScanStatus.bind(LinkScanController));
+router.get('/links/scan/all-status',                      auth,           LinkScanController.getAllScanStatus.bind(LinkScanController));
+router.post('/links/scan/start-all',                      auth,           LinkScanController.startScanAll.bind(LinkScanController));
+
+// الروابط المكتشفة
+router.get('/accounts/:accountId/links/discovered',               auth, LinkScanController.getDiscoveredLinks.bind(LinkScanController));
+router.get('/accounts/:accountId/links/discovered/stats',         auth, LinkScanController.getDiscoveredStats.bind(LinkScanController));
+router.get('/accounts/:accountId/links/discovered/export/csv',    auth, LinkScanController.exportDiscoveredCSV.bind(LinkScanController));
+router.delete('/accounts/:accountId/links/discovered/duplicates', auth, LinkScanController.deleteDuplicates.bind(LinkScanController));
+router.delete('/accounts/:accountId/links/discovered/cleanup',    auth, LinkScanController.cleanupDisabledLinks.bind(LinkScanController));
+router.delete('/accounts/:accountId/links/discovered/:linkId',    auth, LinkScanController.deleteDiscoveredLink.bind(LinkScanController));
+router.patch('/accounts/:accountId/links/discovered/:linkId/status', auth, LinkScanController.updateLinkStatus.bind(LinkScanController));
+
+// الانضمام
+router.post('/accounts/:accountId/links/discovered/join',   auth, LinkScanController.joinDiscoveredLinks.bind(LinkScanController));
+router.post('/accounts/:accountId/links/discovered/import', auth, LinkScanController.importLinks.bind(LinkScanController));
+
+// سجل الانضمام
+router.get('/accounts/:accountId/links/join-history', auth, LinkScanController.getJoinHistory.bind(LinkScanController));
+
+// إعدادات الانضمام
+router.get('/accounts/:accountId/links/join-settings', auth, LinkScanController.getJoinSettings.bind(LinkScanController));
+router.put('/accounts/:accountId/links/join-settings', auth, LinkScanController.updateJoinSettings.bind(LinkScanController));
+
+// ══════════════════════════════════════════════════════
+//  LINK JOIN SYSTEM — نظام الانضمام بالروابط (متعدد الحسابات)
+// ══════════════════════════════════════════════════════
+const LinkJoinController = require('./controllers/LinkJoinController');
+
+// لوحة التحكم الرئيسية والإحصائيات
+router.get('/links/join/dashboard',        auth, LinkJoinController.getDashboard.bind(LinkJoinController));
+
+// الروابط
+router.get('/links/join/all-links',        auth, LinkJoinController.getAllLinks.bind(LinkJoinController));
+router.get('/links/join/joined-links',     auth, LinkJoinController.getJoinedLinks.bind(LinkJoinController));
+router.get('/links/join/unjoined-links',   auth, LinkJoinController.getUnjoinedLinks.bind(LinkJoinController));
+router.get('/links/join/history',          auth, LinkJoinController.getJoinHistory.bind(LinkJoinController));
+
+// تنفيذ الانضمام
+router.post('/links/join/execute',         auth, LinkJoinController.executeJoin.bind(LinkJoinController));
+router.post('/links/join/add-links',       auth, LinkJoinController.addLinks.bind(LinkJoinController));
+router.get('/links/join/job/:jobId',       auth, LinkJoinController.getJobStatus.bind(LinkJoinController));
+
+// حذف وتحديث
+router.post('/links/join/delete',          auth, LinkJoinController.deleteLinks.bind(LinkJoinController));
+router.patch('/links/join/:accountId/:linkId/status', auth, LinkJoinController.updateLinkStatus.bind(LinkJoinController));
+
+// الوضع التلقائي
+router.get('/links/join/auto-mode',              auth, LinkJoinController.getAutoMode.bind(LinkJoinController));
+router.post('/links/join/auto-mode/start',       auth, LinkJoinController.startAutoMode.bind(LinkJoinController));
+router.post('/links/join/auto-mode/stop',        auth, LinkJoinController.stopAutoMode.bind(LinkJoinController));
+router.get('/links/join/auto-settings',          auth, LinkJoinController.getAutoSettings.bind(LinkJoinController));
+router.put('/links/join/auto-settings',          auth, LinkJoinController.updateAutoSettings.bind(LinkJoinController));
+
+// ══════════════════════════════════════════════════════
+//  BROADCAST — FIX: use actual method names
+// ══════════════════════════════════════════════════════
+const BroadcastController = require('./controllers/BroadcastController');
+router.get('/accounts/:accountId/broadcast/schedules',            auth, BroadcastController.getAll.bind(BroadcastController));
+router.post('/accounts/:accountId/broadcast/schedules',           auth, BroadcastController.create.bind(BroadcastController));
+router.put('/accounts/:accountId/broadcast/schedules/:id',        auth, async (req, res) => res.status(501).json({ success: false, error: 'Not implemented' }));
+router.delete('/accounts/:accountId/broadcast/schedules/:id',     auth, BroadcastController.delete.bind(BroadcastController));
+router.post('/accounts/:accountId/broadcast/schedules/:id/pause', auth, BroadcastController.pause.bind(BroadcastController));
+router.post('/accounts/:accountId/broadcast/schedules/:id/start', auth, BroadcastController.start.bind(BroadcastController));
+router.post('/accounts/:accountId/broadcast/direct',              auth, BroadcastController.directPublish.bind(BroadcastController));
+router.get('/accounts/:accountId/broadcast/log',                  auth, BroadcastController.getDirectPublishLog.bind(BroadcastController));
+
+// ── Live Publish — نشر مباشر متعدد الحسابات مع Socket.IO ────────────────────
+router.post('/live-publish/start',                   auth, BroadcastController.startLivePublish.bind(BroadcastController));
+router.get ('/live-publish/active',                   auth, BroadcastController.getActiveLivePublishSession.bind(BroadcastController)); // [إصلاح استمرارية اللوحة] يجب أن يسبق الراوت الديناميكي :sessionId أدناه
+router.post('/live-publish/:sessionId/control',      auth, BroadcastController.controlLivePublish.bind(BroadcastController));
+router.get ('/live-publish/:sessionId/status',       auth, BroadcastController.getLivePublishStatus.bind(BroadcastController));
+
+// ── Schedule Monitor ──────────────────────────────────────────────────────────
+const ScheduleMonitorController = require('./controllers/ScheduleMonitorController');
+router.get('/accounts/:accountId/broadcast/monitor',              auth, ScheduleMonitorController.getMonitor.bind(ScheduleMonitorController));
+router.post('/accounts/:accountId/broadcast/publish-now',         auth, ScheduleMonitorController.publishNow.bind(ScheduleMonitorController));
+
+// ══════════════════════════════════════════════════════
+//  AD LIBRARY — FIX: use actual method names
+// ══════════════════════════════════════════════════════
+const AdLibraryController = require('./controllers/AdLibraryController');
+router.get('/accounts/:accountId/ads',              auth, AdLibraryController.getAll.bind(AdLibraryController));
+router.post('/accounts/:accountId/ads',             auth, AdLibraryController.create.bind(AdLibraryController));
+router.put('/accounts/:accountId/ads/:id',          auth, AdLibraryController.update.bind(AdLibraryController));
+router.delete('/accounts/:accountId/ads/:id',       auth, AdLibraryController.delete.bind(AdLibraryController));
+router.patch('/accounts/:accountId/ads/:id/toggle', auth, async (req, res) => {
+    // Toggle is_active by flipping current value
+    try {
+        const { accountId, id } = req.params;
+        const DatabaseManager = require('../../database/DatabaseManager');
+        const accountDB = await DatabaseManager.getAccountDB(accountId);
+        const ad = await accountDB.get(`SELECT is_active FROM ad_library WHERE id = $1`, [id]);
+        if (!ad) return res.status(404).json({ success: false, error: 'الإعلان غير موجود' });
+        await accountDB.run(`UPDATE ad_library SET is_active = $1, updated_at = NOW() WHERE id = $2`, [ad.is_active ? 0 : 1, id]);
+        res.json({ success: true, is_active: !ad.is_active });
+    } catch (err) {
+        res.status(500).json({ success: false, error: 'Internal Server Error' });
+    }
+});
+
+// ══════════════════════════════════════════════════════
+//  SCHEDULE — FIX: use actual method names
+// ══════════════════════════════════════════════════════
+const ScheduleController = require('./controllers/ScheduleController');
+router.get('/accounts/:accountId/schedules',              auth, ScheduleController.getAll.bind(ScheduleController));
+router.post('/accounts/:accountId/schedules',             auth, ScheduleController.createSchedule.bind(ScheduleController));
+router.put('/accounts/:accountId/schedules/:id',          auth, async (req, res) => res.status(501).json({ success: false, error: 'Not implemented' }));
+router.delete('/accounts/:accountId/schedules/:id',       auth, ScheduleController.deleteSchedule.bind(ScheduleController));
+router.patch('/accounts/:accountId/schedules/:id/status', auth, async (req, res) => {
+    const { status } = req.body;
+    if (status === 'active') return ScheduleController.startSchedule(req, res);
+    return ScheduleController.pauseSchedule(req, res);
+});
+
+// ══════════════════════════════════════════════════════
+//  PRIVATE CAMPAIGNS — الجزء السادس: حملات النشر الخاص
+// ══════════════════════════════════════════════════════
+const PrivateCampaignController = require('./controllers/PrivateCampaignController');
+router.get   ('/private-campaigns',                auth, PrivateCampaignController.listCampaignsHandler.bind(PrivateCampaignController));
+router.post  ('/private-campaigns',                auth, PrivateCampaignController.createCampaignHandler.bind(PrivateCampaignController));
+router.get   ('/private-campaigns/:id',            auth, PrivateCampaignController.getCampaignHandler.bind(PrivateCampaignController));
+router.post  ('/private-campaigns/:id/start',      auth, PrivateCampaignController.startCampaignHandler.bind(PrivateCampaignController));
+router.post  ('/private-campaigns/:id/pause',      auth, PrivateCampaignController.pauseCampaignHandler.bind(PrivateCampaignController));
+router.delete('/private-campaigns/:id',            auth, PrivateCampaignController.deleteCampaignHandler.bind(PrivateCampaignController));
+router.get   ('/private-campaigns/:id/logs',       auth, PrivateCampaignController.getCampaignLogsHandler.bind(PrivateCampaignController));
+router.get   ('/private-campaigns/:id/stats',      auth, PrivateCampaignController.getStatsHandler.bind(PrivateCampaignController));
+
+// ══════════════════════════════════════════════════════
+//  DIAGNOSTICS — نظام التشخيص الاحترافي
+// ══════════════════════════════════════════════════════
+const DiagnosticController = require('./controllers/DiagnosticController');
+router.get ('/accounts/:id/diagnostics',         auth, DiagnosticController.getLastDiagnostic.bind(DiagnosticController));
+router.get ('/accounts/:id/diagnostics/history', auth, DiagnosticController.getDiagnosticHistory.bind(DiagnosticController));
+router.post('/accounts/:id/diagnostics/scan',    auth, DiagnosticController.runFullScan.bind(DiagnosticController));
+router.get ('/admin/diagnostics',                auth, role('admin'), DiagnosticController.getAllDiagnostics.bind(DiagnosticController));
+router.get ('/admin/diagnostics/stats',          auth, role('admin'), DiagnosticController.getDiagnosticStats.bind(DiagnosticController));
+
+// ── Phase 2: Runtime Analysis ─────────────────────────────────────────────
+const RuntimeController = require('./controllers/RuntimeController');
+router.get ('/accounts/:id/runtime/report',                             auth, RuntimeController.getFullReport.bind(RuntimeController));
+router.get ('/accounts/:id/runtime/attempts',                           auth, RuntimeController.getRecentAttempts.bind(RuntimeController));
+router.get ('/accounts/:id/runtime/attempts/:attemptId/timeline',       auth, RuntimeController.getAttemptTimeline.bind(RuntimeController));
+router.get ('/accounts/:id/runtime/errors',                             auth, RuntimeController.getErrorPatterns.bind(RuntimeController));
+router.get ('/accounts/:id/runtime/stats',                              auth, RuntimeController.getConnectionStats.bind(RuntimeController));
+router.get ('/admin/runtime/stats',                                     auth, role('admin'), RuntimeController.getSystemStats.bind(RuntimeController));
+
+// ── Phase 3: Connection Cycle Analysis ───────────────────────────────────────
+const CycleController = require('./controllers/ConnectionCycleController');
+router.get ('/accounts/:id/cycle/latest',                               auth, CycleController.getLatestCycle.bind(CycleController));
+router.get ('/accounts/:id/cycle/history',                              auth, CycleController.getRecentCycles.bind(CycleController));
+router.get ('/accounts/:id/cycle/stats',                                auth, CycleController.getCycleStats.bind(CycleController));
+router.get ('/accounts/:id/cycle/anomalies',                            auth, CycleController.getAnomalies.bind(CycleController));
+router.get ('/accounts/:id/cycle/attempts/:attemptId',                  auth, CycleController.getCycleByAttempt.bind(CycleController));
+router.get ('/accounts/:id/cycle/attempts/:attemptId/report',           auth, CycleController.getCycleReport.bind(CycleController));
+router.get ('/admin/cycle/stats',                                       auth, role('admin'), CycleController.getSystemStats.bind(CycleController));
+
+// ── Phase 4: Database Analysis ────────────────────────────────────────────────
+const DatabaseAnalyzerController = require('./controllers/DatabaseAnalyzerController');
+router.get ('/accounts/:id/db/health',          auth,        DatabaseAnalyzerController.getAccountDbHealth.bind(DatabaseAnalyzerController));
+router.get ('/accounts/:id/db/check',           auth,        DatabaseAnalyzerController.quickAccountCheck.bind(DatabaseAnalyzerController));
+router.get ('/admin/db/report',                 auth, role('admin'),   DatabaseAnalyzerController.getFullReport.bind(DatabaseAnalyzerController));
+router.get ('/admin/db/contradictions',         auth, role('admin'),   DatabaseAnalyzerController.getContradictions.bind(DatabaseAnalyzerController));
+router.get ('/admin/db/bloat',                  auth, role('admin'),   DatabaseAnalyzerController.getBloatReport.bind(DatabaseAnalyzerController));
+router.get ('/admin/db/performance',            auth, role('admin'),   DatabaseAnalyzerController.getPerformanceReport.bind(DatabaseAnalyzerController));
+router.get ('/admin/db/stats',                  auth, role('admin'),   DatabaseAnalyzerController.getStats.bind(DatabaseAnalyzerController));
+
+// ── Phase 5: Redis Analysis ───────────────────────────────────────────────────
+const RedisAnalyzerController = require('./controllers/RedisAnalyzerController');
+router.get ('/accounts/:id/redis/rate-keys',    auth,        RedisAnalyzerController.getAccountRateKeys.bind(RedisAnalyzerController));
+router.get ('/admin/redis/report',              auth, role('admin'),   RedisAnalyzerController.getFullReport.bind(RedisAnalyzerController));
+router.get ('/admin/redis/connection',          auth, role('admin'),   RedisAnalyzerController.getConnectionInfo.bind(RedisAnalyzerController));
+router.get ('/admin/redis/rate-keys',           auth, role('admin'),   RedisAnalyzerController.getAllRateKeys.bind(RedisAnalyzerController));
+router.get ('/admin/redis/jwt-blacklist',       auth, role('admin'),   RedisAnalyzerController.getJWTBlacklist.bind(RedisAnalyzerController));
+router.get ('/admin/redis/bullmq',              auth, role('admin'),   RedisAnalyzerController.getBullMQStatus.bind(RedisAnalyzerController));
+router.get ('/admin/redis/no-ttl',              auth, role('admin'),   RedisAnalyzerController.getNoTTLKeys.bind(RedisAnalyzerController));
+router.get ('/admin/redis/memory',              auth, role('admin'),   RedisAnalyzerController.getMemoryDistribution.bind(RedisAnalyzerController));
+
+// ── Phase 6: Session Deep Analysis ───────────────────────────────────────────
+const SessionAnalyzerController = require('./controllers/SessionAnalyzerController');
+router.get ('/accounts/:id/session/report',        auth,      SessionAnalyzerController.getAccountReport.bind(SessionAnalyzerController));
+router.get ('/accounts/:id/session/credentials',   auth,      SessionAnalyzerController.getCredentials.bind(SessionAnalyzerController));
+router.get ('/accounts/:id/session/signal-keys',   auth,      SessionAnalyzerController.getSignalKeys.bind(SessionAnalyzerController));
+router.get ('/accounts/:id/session/stats',         auth,      SessionAnalyzerController.getAccountStats.bind(SessionAnalyzerController));
+router.get ('/admin/session/report',               auth, role('admin'),  SessionAnalyzerController.getSystemReport.bind(SessionAnalyzerController));
+router.get ('/admin/session/stats',                auth, role('admin'),  SessionAnalyzerController.getSystemStats.bind(SessionAnalyzerController));
+router.get ('/admin/session/stale',                auth, role('admin'),  SessionAnalyzerController.getStaleAccounts.bind(SessionAnalyzerController));
+
+// ── المرحلة السابعة — QR Code Analysis ───────────────────────────────────
+const QRAnalyzerController = require('./controllers/QRAnalyzerController');
+
+// Per-Account
+router.get ('/accounts/:id/qr/report',   auth,      QRAnalyzerController.getAccountReport.bind(QRAnalyzerController));
+router.get ('/accounts/:id/qr/stats',    auth,      QRAnalyzerController.getAccountStats.bind(QRAnalyzerController));
+router.get ('/accounts/:id/qr/history',  auth,      QRAnalyzerController.getAccountHistory.bind(QRAnalyzerController));
+router.get ('/accounts/:id/qr/latency',  auth,      QRAnalyzerController.getLatency.bind(QRAnalyzerController));
+
+// Admin
+router.get ('/admin/qr/report',          auth, role('admin'),  QRAnalyzerController.getSystemReport.bind(QRAnalyzerController));
+router.get ('/admin/qr/stats',           auth, role('admin'),  QRAnalyzerController.getSystemStats.bind(QRAnalyzerController));
+router.get ('/admin/qr/slow',            auth, role('admin'),  QRAnalyzerController.getSlowAccounts.bind(QRAnalyzerController));
+
+// ── المرحلة الثامنة — Pairing Code Analysis ──────────────────────────────
+const PairingCodeAnalyzerController = require('./controllers/PairingCodeAnalyzerController');
+
+// Per-Account
+router.get ('/accounts/:id/pairing/report',   auth,      PairingCodeAnalyzerController.getAccountReport.bind(PairingCodeAnalyzerController));
+router.get ('/accounts/:id/pairing/stats',    auth,      PairingCodeAnalyzerController.getAccountStats.bind(PairingCodeAnalyzerController));
+router.get ('/accounts/:id/pairing/history',  auth,      PairingCodeAnalyzerController.getAccountHistory.bind(PairingCodeAnalyzerController));
+router.get ('/accounts/:id/pairing/latency',  auth,      PairingCodeAnalyzerController.getLatency.bind(PairingCodeAnalyzerController));
+
+// Admin
+router.get ('/admin/pairing/report',          auth, role('admin'),  PairingCodeAnalyzerController.getSystemReport.bind(PairingCodeAnalyzerController));
+router.get ('/admin/pairing/stats',           auth, role('admin'),  PairingCodeAnalyzerController.getSystemStats.bind(PairingCodeAnalyzerController));
+router.get ('/admin/pairing/problematic',     auth, role('admin'),  PairingCodeAnalyzerController.getProblematicAccounts.bind(PairingCodeAnalyzerController));
+
+// ── المرحلة التاسعة — Baileys Deep Analysis ──────────────────────────────
+const BaileysAnalyzerController = require('./controllers/BaileysAnalyzerController');
+
+// Per-Account
+router.get ('/accounts/:id/baileys/report',           auth,      BaileysAnalyzerController.getAccountReport.bind(BaileysAnalyzerController));
+router.get ('/accounts/:id/baileys/stats',            auth,      BaileysAnalyzerController.getAccountStats.bind(BaileysAnalyzerController));
+router.get ('/accounts/:id/baileys/history',          auth,      BaileysAnalyzerController.getAccountHistory.bind(BaileysAnalyzerController));
+router.get ('/accounts/:id/baileys/events',           auth,      BaileysAnalyzerController.getEventBreakdown.bind(BaileysAnalyzerController));
+router.get ('/accounts/:id/baileys/messages/errors',  auth,      BaileysAnalyzerController.getMessageErrors.bind(BaileysAnalyzerController));
+
+// Admin
+router.get ('/admin/baileys/report',                  auth, role('admin'),  BaileysAnalyzerController.getSystemReport.bind(BaileysAnalyzerController));
+router.get ('/admin/baileys/stats',                   auth, role('admin'),  BaileysAnalyzerController.getSystemStats.bind(BaileysAnalyzerController));
+router.get ('/admin/baileys/problematic',             auth, role('admin'),  BaileysAnalyzerController.getProblematicAccounts.bind(BaileysAnalyzerController));
+
+// ── المرحلة العاشرة — Infrastructure Analysis ─────────────────────────────
+const InfrastructureController = require('./controllers/InfrastructureController');
+
+router.get ('/admin/infra/report',           auth, role('admin'),  InfrastructureController.getSystemReport.bind(InfrastructureController));
+router.get ('/admin/infra/stats',            auth, role('admin'),  InfrastructureController.getQuickStats.bind(InfrastructureController));
+router.get ('/admin/infra/postgres',         auth, role('admin'),  InfrastructureController.getPostgresHealth.bind(InfrastructureController));
+router.get ('/admin/infra/postgres/tables',  auth, role('admin'),  InfrastructureController.getPostgresTableStats.bind(InfrastructureController));
+router.get ('/admin/infra/redis',            auth, role('admin'),  InfrastructureController.getRedisHealth.bind(InfrastructureController));
+router.get ('/admin/infra/redis/keys',       auth, role('admin'),  InfrastructureController.getRedisKeyDistribution.bind(InfrastructureController));
+router.get ('/admin/infra/bullmq',           auth, role('admin'),  InfrastructureController.getBullMQStats.bind(InfrastructureController));
+router.get ('/admin/infra/process',          auth, role('admin'),  InfrastructureController.getProcessInfo.bind(InfrastructureController));
+
+
+// ══════════════════════════════════════════════════════
+//  KEYWORD MONITORING
+// ══════════════════════════════════════════════════════
+const KWController = require('./controllers/KeywordMonitoringController');
+
+// الكلمات المفتاحية
+router.get   ('/keywords',              auth, KWController.listKeywords.bind(KWController));
+router.post  ('/keywords',              auth, KWController.addKeyword.bind(KWController));
+router.patch ('/keywords/:id',          auth, KWController.updateKeyword.bind(KWController));
+router.delete('/keywords/:id',          auth, KWController.deleteKeyword.bind(KWController));
+router.get   ('/keywords/export',       auth, KWController.exportKeywords.bind(KWController));
+router.post  ('/keywords/import',       auth, KWController.importKeywords.bind(KWController));
+
+// التنبيهات
+router.get   ('/keyword-alerts',        auth, KWController.listAlerts.bind(KWController));
+router.patch ('/keyword-alerts/:id',    auth, KWController.updateAlertStatus.bind(KWController));
+router.delete('/keyword-alerts/:id',    auth, KWController.deleteAlert.bind(KWController));
+router.post  ('/keyword-alerts/:id/note', auth, KWController.addAlertNote.bind(KWController));
+
+// الإحصائيات والإعدادات والسجل
+router.get   ('/keywords/stats',        auth, KWController.getStats.bind(KWController));
+router.get   ('/keywords/settings',     auth, KWController.getSettings.bind(KWController));
+router.post  ('/keywords/settings',     auth, KWController.saveSettings.bind(KWController));
+router.get   ('/keywords/activity-log', auth, KWController.getActivityLog.bind(KWController));
+
+// ══════════════════════════════════════════════════════
+//  TELEGRAM SYSTEM
+// ══════════════════════════════════════════════════════
+const TelegramController = require("./controllers/TelegramController");
+
+// ── حسابات تيليجرام (تتطلب مصادقة) ────────────────
+// ⚠️ المسارات الثابتة أولاً (workers/stats) قبل /:id
+router.post  ("/telegram/accounts",                    auth, TelegramController.addAccount.bind(TelegramController));
+router.get   ("/telegram/accounts",                    auth, TelegramController.listAccounts.bind(TelegramController));
+router.get   ("/telegram/accounts/workers",            auth, TelegramController.getWorkersStatus.bind(TelegramController));
+router.get   ("/telegram/accounts/stats",              auth, TelegramController.getStats.bind(TelegramController));
+router.get   ("/telegram/accounts/:id",                auth, TelegramController.getAccount.bind(TelegramController));
+router.put   ("/telegram/accounts/:id",                auth, TelegramController.updateAccount.bind(TelegramController));
+router.delete("/telegram/accounts/:id",                auth, TelegramController.deleteAccount.bind(TelegramController));
+router.post  ("/telegram/accounts/:id/start",          auth, TelegramController.startWorker.bind(TelegramController));
+router.post  ("/telegram/accounts/:id/stop",           auth, TelegramController.stopWorker.bind(TelegramController));
+
+// ── روابط واتساب المكتشفة (تتطلب مصادقة) ───────────
+// ⚠️ المسارات الثابتة (export / bulk-delete) قبل /:id
+router.get   ("/telegram/links",                       auth, TelegramController.listLinks.bind(TelegramController));
+router.get   ("/telegram/links/export",                auth, TelegramController.exportLinks.bind(TelegramController));
+router.post  ("/telegram/links/bulk-delete",           auth, TelegramController.bulkDeleteLinks.bind(TelegramController));
+router.patch ("/telegram/links/:id",                   auth, TelegramController.updateLinkStatus.bind(TelegramController));
+router.delete("/telegram/links/:id",                   auth, TelegramController.deleteLink.bind(TelegramController));
+
+// ── استقبال رسائل خارجية (بدون مصادقة JWT — تأمين بـ secret) ──────────────
+// يُستخدم من سكريبت Python (telethon/pyrogram) أو أي Telegram bot
+// POST /api/telegram/ingest/:accountId
+// Body: { messages: [{text, group_name}], secret } أو { text, group_name, secret }
+router.post("/telegram/ingest/:accountId", TelegramController.receiveIngest.bind(TelegramController));
+
+// ── Telegram Bot API Webhook (بدون مصادقة — يُرسَل من Telegram) ─────────────
+// يجب تفعيله عبر: https://api.telegram.org/bot{TOKEN}/setWebhook?url=.../api/telegram/webhook/:accountId
+router.post("/telegram/webhook/:accountId", TelegramController.receiveBotWebhook.bind(TelegramController));
+
+module.exports = router;
+
+
