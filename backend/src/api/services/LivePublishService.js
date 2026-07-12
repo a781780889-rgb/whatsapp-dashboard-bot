@@ -73,6 +73,14 @@ class LiveSession {
         // إرسال نفس الرسالة أكثر من مرة لنفس الرقم إن ظهر في أكثر من مجموعة
         // (أو أكثر من حساب) ضمن نفس جلسة النشر.
         this._sentPhones = new Set();
+
+        // [تحسين مقاومة الحظر] نافذة زمنية دوّارة لطوابع الرسائل المُرسلة
+        // (تُستخدم لتطبيق حد أقصى قابل للتعديل: cfg.rateLimit.maxMessages ضمن
+        // cfg.rateLimit.windowMs) + عدّاد أخطاء متتالية لتفعيل الإيقاف التلقائي
+        // المؤقّت (cfg.autoPause.errorThreshold + cooldownMs) عند ظهور مؤشرات
+        // على وجود قيود من واتساب، ثم استئناف الإرسال لاحقاً تلقائياً.
+        this._sendTimestamps    = [];
+        this._consecutiveErrors = 0;
     }
 
     // ── [قائمة الأعضاء الحية] تسجيل/تحديث حالة رقم عضو معيّن، ثم بث القائمة
@@ -239,9 +247,58 @@ class LivePublishService {
     //    @param {string} accountId
     //    @param {'group'|'private'|'ad'} kind  نوع التأخير المطلوب من cfg.delays
     async _safeDelay(sess, accountId, kind = 'group') {
-        // القيمة التي اختارها المستخدم فعلياً من واجهة النشر المباشر (خاصة بهذه الجلسة)
         const userMs = this._userDelayMs(sess, kind);
-        return this._sleep(userMs);
+        // [تحسين مقاومة الحظر] تأخير عشوائي حول القيمة التي حدّدها المستخدم
+        // (±30%) لتقليل نمطية الإرسال ومحاكاة سلوك بشري بدل فواصل ثابتة
+        // يسهل على واتساب تصنيفها كأتمتة. الحد الأدنى صفر.
+        const jitterRange = Math.floor(userMs * 0.3);
+        const jitter = jitterRange > 0 ? Math.floor(Math.random() * (jitterRange * 2 + 1)) - jitterRange : 0;
+        return this._sleep(Math.max(0, userMs + jitter));
+    }
+
+    // ── [تحسين مقاومة الحظر] فرض الحد الأقصى للرسائل ضمن نافذة زمنية ─────
+    //    يقرأ cfg.rateLimit = { maxMessages, windowMs } الذي يمكن ضبطه من
+    //    لوحة التحكم. إن لم يُضبط، لا يُطبَّق أي حد إضافي (السلوك الافتراضي
+    //    القديم). إن تجاوزت الجلسة الحد، ننتظر تلقائياً حتى يتحرّر مكان
+    //    داخل النافذة الدوّارة.
+    async _enforceRateLimit(sess) {
+        const rl = sess?.cfg?.rateLimit || {};
+        const max = Math.max(0, Number(rl.maxMessages) || 0);
+        const windowMs = Math.max(1000, Number(rl.windowMs) || 60_000);
+        if (!max) return;
+        const now = Date.now();
+        sess._sendTimestamps = (sess._sendTimestamps || []).filter(t => now - t < windowMs);
+        if (sess._sendTimestamps.length >= max) {
+            const wait = windowMs - (now - sess._sendTimestamps[0]) + 50;
+            sess.log('warning',
+                `⏸️ تم بلوغ الحد (${max} رسالة / ${Math.round(windowMs/1000)}ث) — انتظار ${Math.round(wait/1000)}ث قبل المتابعة`
+            );
+            await this._sleep(wait);
+        }
+    }
+
+    // ── [تحسين مقاومة الحظر] إيقاف تلقائي مؤقت عند تتالي أخطاء الإرسال ────
+    //    عند بلوغ cfg.autoPause.errorThreshold أخطاء متتالية، ندخل فترة تبريد
+    //    (cfg.autoPause.cooldownMs) ثم نستأنف تلقائياً. أي نجاح لاحق يُصفّر
+    //    العدّاد. الحالة تُسجَّل في السجل وتُبث عبر Socket.IO كباقي الأحداث.
+    async _autoPauseIfNeeded(sess, hadError) {
+        const ap = sess?.cfg?.autoPause || {};
+        const threshold  = Math.max(0, Number(ap.errorThreshold) || 5);
+        const cooldownMs = Math.max(1000, Number(ap.cooldownMs) || 60_000);
+        if (!threshold) { if (!hadError) sess._consecutiveErrors = 0; return; }
+        if (hadError) {
+            sess._consecutiveErrors = (sess._consecutiveErrors || 0) + 1;
+            if (sess._consecutiveErrors >= threshold) {
+                sess.log('warning',
+                    `🛑 إيقاف تلقائي مؤقت بعد ${sess._consecutiveErrors} أخطاء متتالية — تبريد ${Math.round(cooldownMs/1000)}ث`
+                );
+                await this._sleep(cooldownMs);
+                sess._consecutiveErrors = 0;
+                sess.log('info', '▶️ انتهت فترة التبريد — استئناف الإرسال');
+            }
+        } else {
+            sess._consecutiveErrors = 0;
+        }
     }
 
     // ── قراءة قيمة التأخير التي اختارها المستخدم من cfg.delays الخاصة بالجلسة (ms) ─
@@ -599,14 +656,18 @@ class LivePublishService {
                                 let sentMember = false;
                                 for (let attempt = 1; attempt <= MAX_RETRY + 1 && !sentMember && !accountSuspendedMidRun; attempt++) {
                                     try {
+                                        // [تحسين مقاومة الحظر] فرض الحد الأقصى القابل للتعديل قبل كل إرسال
+                                        await this._enforceRateLimit(sess);
                                         await this._send(accountId, sendJid, msg, { operationType: 'private' });
                                         sess.stats.sentMembers++;
                                         sess.recordSent();
+                                        sess._sendTimestamps.push(Date.now());
                                         sess.log('success', `✅ خاص → ${sendJid.split('@')[0]}`);
                                         sess.upsertRosterEntry(sendJid.split('@')[0], {
                                             groupJid: jid, groupName, status: 'sent', reason: null,
                                         });
                                         sentMember = true;
+                                        await this._autoPauseIfNeeded(sess, false);
                                     } catch (e) {
                                         // [البند 3] توقف فوري لكل عمليات هذا الحساب عند تعليقه
                                         if (e.protectionReason === 'account_suspended') {
@@ -636,6 +697,8 @@ class LivePublishService {
                                             sess.upsertRosterEntry(sendJid.split('@')[0], {
                                                 groupJid: jid, groupName, status: 'failed', reason: e.message || 'فشل الإرسال',
                                             });
+                                            // [تحسين مقاومة الحظر] تفعيل الإيقاف التلقائي عند تتالي الأخطاء
+                                            await this._autoPauseIfNeeded(sess, true);
                                         }
                                     }
                                 }
