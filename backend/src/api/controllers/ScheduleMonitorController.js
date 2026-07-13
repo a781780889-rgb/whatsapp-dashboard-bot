@@ -8,8 +8,7 @@ class ScheduleMonitorController {
      * يرجع بيانات المتابعة للنشر المجدول لحساب واحد:
      *  - الجداول النشطة مع أقرب موعد نشر
      *  - إحصائيات المجموعات (إجمالي / تم النشر / متبقي)
-     *  - إحصائيات النشر الخاص من private_campaigns
-     */
+         */
     async getMonitor(req, res) {
         try {
             const { accountId } = req.params;
@@ -86,30 +85,6 @@ class ScheduleMonitorController {
                 publishedToday = sentJids.size;
             } catch (_) { /* جدول قد لا يكون موجوداً في بيئة الاختبار */ }
 
-            // ── 4. النشر الخاص (private_campaigns) لهذا الحساب ──────────────
-            let privateCampaignStats = null;
-            try {
-                const userId = req.user?.id;
-                if (userId) {
-                    const pcRes = await pool.query(
-                        `SELECT pc.id, pc.name, pc.status,
-                                pc.total_targets, pc.sent_count, pc.failed_count,
-                                pc.interval_seconds, pc.start_time, pc.end_time,
-                                pc.updated_at,
-                                pca.messages_sent, pca.messages_limit, pca.messages_failed
-                         FROM private_campaigns pc
-                         LEFT JOIN private_campaign_accounts pca
-                           ON pca.campaign_id = pc.id AND pca.account_id = $2
-                         WHERE pc.user_id = $1
-                           AND pc.status IN ('running','paused','draft')
-                         ORDER BY pc.created_at DESC
-                         LIMIT 5`,
-                        [userId, accountId]
-                    );
-                    privateCampaignStats = pcRes.rows;
-                }
-            } catch (_) { /* لا يوجد جدول private_campaigns بعد */ }
-
             res.json({
                 success: true,
                 accountId,
@@ -123,7 +98,6 @@ class ScheduleMonitorController {
                     remainingGroups:     Math.max(0, totalGroupCount - publishedToday),
                 },
                 nextPublish,
-                privateCampaigns: privateCampaignStats || [],
             });
         } catch (err) {
             console.error('[ScheduleMonitor] getMonitor error:', err);
