@@ -333,18 +333,6 @@ router.patch('/accounts/:accountId/schedules/:id/status', auth, async (req, res)
     return ScheduleController.pauseSchedule(req, res);
 });
 
-// ══════════════════════════════════════════════════════
-//  PRIVATE CAMPAIGNS — الجزء السادس: حملات النشر الخاص
-// ══════════════════════════════════════════════════════
-const PrivateCampaignController = require('./controllers/PrivateCampaignController');
-router.get   ('/private-campaigns',                auth, PrivateCampaignController.listCampaignsHandler.bind(PrivateCampaignController));
-router.post  ('/private-campaigns',                auth, PrivateCampaignController.createCampaignHandler.bind(PrivateCampaignController));
-router.get   ('/private-campaigns/:id',            auth, PrivateCampaignController.getCampaignHandler.bind(PrivateCampaignController));
-router.post  ('/private-campaigns/:id/start',      auth, PrivateCampaignController.startCampaignHandler.bind(PrivateCampaignController));
-router.post  ('/private-campaigns/:id/pause',      auth, PrivateCampaignController.pauseCampaignHandler.bind(PrivateCampaignController));
-router.delete('/private-campaigns/:id',            auth, PrivateCampaignController.deleteCampaignHandler.bind(PrivateCampaignController));
-router.get   ('/private-campaigns/:id/logs',       auth, PrivateCampaignController.getCampaignLogsHandler.bind(PrivateCampaignController));
-router.get   ('/private-campaigns/:id/stats',      auth, PrivateCampaignController.getStatsHandler.bind(PrivateCampaignController));
 
 // ══════════════════════════════════════════════════════
 //  DIAGNOSTICS — نظام التشخيص الاحترافي
