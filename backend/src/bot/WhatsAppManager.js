@@ -8,7 +8,7 @@
  * إعادة الهيكلة الحالية تضيف:
  *
  *  [البند 1] sendMessageSafe() — نقطة الإرسال المركزية الوحيدة المعتمدة:
- *      كل إرسال في المشروع (Broadcast/Campaign/PrivateCampaign/LivePublish/
+ *      كل إرسال في المشروع (Broadcast/Campaign/LivePublish/
  *      GroupJoiner...) يجب أن يمر عبرها. تقوم تلقائياً بمحاكاة سلوك بشري
  *      ثم تنفيذ الإرسال. الدوال القديمة (sendMessage/sendTextMessage/
  *      sendGroupMessage) بقيت كما هي لأي كود لا يزال يستدعيها مباشرة
@@ -426,31 +426,6 @@ class WhatsAppManager {
             await JobScheduler.removeAccountJobs(accountId);
         } catch (err) {
             console.error(`[WAManager] _excludeFromAllCampaigns: JobScheduler error:`, err.message);
-        }
-
-        // (ب) تعليم أهداف الحملات الخاصة (private_campaign_groups) المرتبطة بهذا
-        //     الحساب والتي لا تزال 'pending' كـ 'failed' حتى لا تبقى عالقة في
-        //     انتظار حساب محظور لن يُكمل الإرسال أبداً.
-        try {
-            const { Pool } = require('pg');
-            const pool = new Pool({
-                connectionString: process.env.DATABASE_URL,
-                ssl: process.env.DATABASE_URL?.includes('railway') ? { rejectUnauthorized: false } : false,
-            });
-            await pool.query(
-                `UPDATE private_campaign_groups
-                 SET status='failed', error_msg='account_banned'
-                 WHERE account_id=$1 AND status='pending'`,
-                [accountId]
-            );
-            await pool.query(
-                `UPDATE private_campaign_accounts
-                 SET status='failed'
-                 WHERE account_id=$1 AND status IN ('pending','running')`,
-                [accountId]
-            );
-        } catch (err) {
-            console.error(`[WAManager] _excludeFromAllCampaigns: private campaigns update error:`, err.message);
         }
 
         // (ج) إيقاف أي broadcast_schedules نشطة كانت تعتمد حصرياً على هذا الحساب
