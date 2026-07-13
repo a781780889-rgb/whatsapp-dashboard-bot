@@ -1,7 +1,7 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
 import {
-  LayoutDashboard, Users, Library, Send, Calendar,
+  LayoutDashboard, Users, Library, Calendar,
   Megaphone, Link as LinkIcon, LogOut, ChevronRight,
   UsersRound, BarChart3, Crown, Brain, Activity,
   GitMerge, MessageCircle, CreditCard, Monitor, SearchCheck
@@ -31,7 +31,6 @@ export function Sidebar({ isCollapsed, setIsCollapsed, currentUser, onLogout }: 
       section: 'النشر',
       items: [
         { to: '/ad-library',        icon: Library,   label: 'مكتبة الإعلانات'   },
-        { to: '/direct-publish',    icon: Send,       label: 'النشر المباشر'     },
         { to: '/schedules',         icon: Calendar,   label: 'النشر المجدول'     },
         { to: '/campaigns',         icon: Megaphone,  label: 'الحملات'           },
         { to: '/groups',            icon: UsersRound, label: 'المجموعات'         },
