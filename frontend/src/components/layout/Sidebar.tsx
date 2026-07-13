@@ -3,7 +3,7 @@ import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Library, Send, Calendar,
   Megaphone, Link as LinkIcon, LogOut, ChevronRight,
-  UsersRound, BarChart3, Crown, Rocket, Brain, Activity,
+  UsersRound, BarChart3, Crown, Brain, Activity,
   GitMerge, MessageCircle, CreditCard, Monitor, SearchCheck
 } from 'lucide-react';
 import { cn } from '@/utils/cn';
@@ -34,7 +34,6 @@ export function Sidebar({ isCollapsed, setIsCollapsed, currentUser, onLogout }: 
         { to: '/direct-publish',    icon: Send,       label: 'النشر المباشر'     },
         { to: '/schedules',         icon: Calendar,   label: 'النشر المجدول'     },
         { to: '/campaigns',         icon: Megaphone,  label: 'الحملات'           },
-        { to: '/private-campaigns', icon: Rocket,     label: 'حملات النشر الخاص' },
         { to: '/groups',            icon: UsersRound, label: 'المجموعات'         },
       ]
     },
