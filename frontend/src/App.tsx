@@ -14,7 +14,6 @@ import LinkJoinView         from './views/LinkJoinView';
 import ScheduleDashboardView from './views/ScheduleDashboardView';
 import AdLibraryView        from './views/AdLibraryView';
 import DirectPublishView    from './views/DirectPublishView';
-import PrivateCampaignsView from './views/PrivateCampaignsView';
 import AIAutomationView    from './views/AIAutomationView';
 import KeywordMonitoringView from './views/KeywordMonitoringView';
 // Admin views
@@ -197,9 +196,7 @@ function AppInner() {
             />
           } />
           <Route path="/campaigns"      element={<CampaignsView      accountId={selectedAccountId} />} />
-          <Route path="/private-campaigns" element={
-            <PrivateCampaignsView accountId={selectedAccountId} accounts={accounts} />
-          } />
+
           <Route path="/groups"         element={<GroupsView          accountId={selectedAccountId} />} />
           <Route path="/links"          element={<LinkDashboardView    accountId={selectedAccountId} />} />
           <Route path="/link-join"      element={<LinkJoinView          accountId={selectedAccountId} accounts={accounts} />} />
