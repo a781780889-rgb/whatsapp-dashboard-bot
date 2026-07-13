@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Users, Clock, Play, Pause, Zap, RefreshCw,
-  ChevronDown, ChevronUp, Send, StopCircle,
+  ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -23,19 +23,6 @@ interface Schedule {
   send_to_members: boolean;
 }
 
-interface PrivateCampaign {
-  id: string;
-  name: string;
-  status: string;
-  total_targets: number;
-  sent_count: number;
-  failed_count: number;
-  interval_seconds: number;
-  messages_sent: number | null;
-  messages_limit: number | null;
-  messages_failed: number | null;
-}
-
 interface MonitorData {
   schedules: Schedule[];
   summary: {
@@ -51,7 +38,6 @@ interface MonitorData {
     scheduleId: string;
     scheduleName: string;
   } | null;
-  privateCampaigns: PrivateCampaign[];
 }
 
 interface AccountInfo {
@@ -169,14 +155,6 @@ function AccountMonitorCard({ account }: { account: AccountInfo }) {
   const publishedToday  = data?.summary.publishedToday ?? 0;
   const remainingGroups = data?.summary.remainingGroups ?? 0;
 
-  // ── الحملة الخاصة النشطة (أو آخر واحدة) ───────────────────────────────────
-  const activeCampaign  = data?.privateCampaigns.find(c => c.status === 'running')
-                       ?? data?.privateCampaigns[0];
-
-  const privateTotal    = activeCampaign?.total_targets ?? 0;
-  const privateSent     = activeCampaign?.sent_count ?? 0;
-  const privateRemaining = Math.max(0, privateTotal - privateSent);
-
   // ── Actions ─────────────────────────────────────────────────────────────────
   const handleGroupAction = async (action: 'publish-now' | 'pause' | 'resume') => {
     if (!firstActive && action !== 'publish-now') return;
@@ -200,22 +178,6 @@ function AccountMonitorCard({ account }: { account: AccountInfo }) {
     }
   };
 
-  const handlePrivateAction = async (action: 'send-now' | 'pause' | 'resume') => {
-    if (!activeCampaign) return;
-    setActionLoading('pc-' + action);
-    try {
-      if (action === 'pause') {
-        await authFetch(`${API}/private-campaigns/${activeCampaign.id}/pause`, { method: 'POST' });
-      } else if (action === 'resume') {
-        await authFetch(`${API}/private-campaigns/${activeCampaign.id}/start`, { method: 'POST' });
-      }
-      await load();
-    } catch (e) {
-      console.error('[Monitor] pc action error', e);
-    } finally {
-      setActionLoading('');
-    }
-  };
 
   const accountStatus = account.status === 'connected' ? 'active' : 'stopped';
   const displayName   = account.name || account.phone || account.id;
@@ -265,11 +227,8 @@ function AccountMonitorCard({ account }: { account: AccountInfo }) {
             </div>
           )}
 
-          {/* ── القسمان الرئيسيان ────────────────────────────────────────── */}
-          <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x md:divide-x-reverse divide-[var(--border-default)]">
-
-            {/* ── أ) النشر بالمجموعات ───────────────────────────────────── */}
-            <div className="p-4 flex flex-col gap-3">
+          {/* ── النشر بالمجموعات ────────────────────────────────────────────── */}
+          <div className="p-4 flex flex-col gap-3">
               <div className="flex items-center gap-2 mb-1">
                 <Users className="w-4 h-4 text-[var(--brand-primary)]" />
                 <h4 className="text-sm font-semibold text-[var(--text-primary)]">النشر في المجموعات</h4>
@@ -350,100 +309,6 @@ function AccountMonitorCard({ account }: { account: AccountInfo }) {
                 </>
               )}
             </div>
-
-            {/* ── ب) النشر الخاص للأعضاء ───────────────────────────────── */}
-            <div className="p-4 flex flex-col gap-3">
-              <div className="flex items-center gap-2 mb-1">
-                <Send className="w-4 h-4 text-purple-400" />
-                <h4 className="text-sm font-semibold text-[var(--text-primary)]">النشر الخاص للأعضاء</h4>
-              </div>
-
-              {!activeCampaign && !loading ? (
-                <p className="text-xs text-[var(--text-muted)] py-2">لا توجد حملات خاصة نشطة</p>
-              ) : (
-                <>
-                  {/* الحالة */}
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-[var(--text-muted)]">الحالة</span>
-                    <Badge variant="outline" className={cn('text-xs border', statusBg(activeCampaign?.status ?? 'stopped'))}>
-                      {activeCampaign ? statusLabel(activeCampaign.status) : '—'}
-                    </Badge>
-                  </div>
-
-                  {/* الإحصائيات */}
-                  <div className="grid grid-cols-3 gap-2 text-center">
-                    {[
-                      { label: 'المستهدفون', value: privateTotal, color: 'text-blue-400' },
-                      { label: 'تم الإرسال', value: privateSent, color: 'text-green-400' },
-                      { label: 'المتبقي', value: privateRemaining, color: 'text-yellow-400' },
-                    ].map(stat => (
-                      <div key={stat.label} className="bg-[var(--bg-elevated)] rounded-lg p-2">
-                        <div className={cn('text-xl font-bold tabular-nums', stat.color)}>{stat.value}</div>
-                        <div className="text-[10px] text-[var(--text-muted)] mt-0.5">{stat.label}</div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <ProgressBar value={privateSent} max={privateTotal} color="bg-purple-500" />
-
-                  {/* الفاصل الزمني */}
-                  {activeCampaign?.interval_seconds && (
-                    <div className="text-xs text-[var(--text-muted)] flex items-center gap-1">
-                      <Clock className="w-3 h-3" />
-                      <span>الفاصل بين الرسائل:</span>
-                      <span className="font-mono dir-ltr font-semibold text-[var(--text-primary)]">
-                        {activeCampaign.interval_seconds}ث
-                      </span>
-                    </div>
-                  )}
-
-                  {/* اسم الحملة */}
-                  {activeCampaign?.name && (
-                    <p className="text-[10px] text-[var(--text-muted)] truncate">
-                      الحملة: {activeCampaign.name}
-                    </p>
-                  )}
-
-                  {/* الأزرار */}
-                  <div className="flex gap-2 flex-wrap mt-1">
-                    <Button
-                      size="sm"
-                      className="h-7 text-xs gap-1 bg-purple-600 hover:bg-purple-500"
-                      onClick={() => handlePrivateAction('send-now')}
-                      disabled={!!actionLoading || !activeCampaign}
-                    >
-                      <Zap className="w-3 h-3" />
-                      إرسال مباشر
-                    </Button>
-                    {activeCampaign?.status === 'running' ? (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-7 text-xs gap-1 border-yellow-500/50 text-yellow-400 hover:bg-yellow-500/10"
-                        onClick={() => handlePrivateAction('pause')}
-                        disabled={!!actionLoading}
-                      >
-                        <StopCircle className="w-3 h-3" />
-                        إيقاف الإرسال
-                      </Button>
-                    ) : (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-7 text-xs gap-1 border-green-500/50 text-green-400 hover:bg-green-500/10"
-                        onClick={() => handlePrivateAction('resume')}
-                        disabled={!!actionLoading || !activeCampaign}
-                      >
-                        <Play className="w-3 h-3" />
-                        استئناف الإرسال
-                      </Button>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-
-          </div>
         </CardContent>
       )}
     </Card>
