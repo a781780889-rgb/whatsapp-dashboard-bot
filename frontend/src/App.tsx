@@ -13,7 +13,6 @@ import LinkDashboardView    from './views/LinkDashboardView';
 import LinkJoinView         from './views/LinkJoinView';
 import ScheduleDashboardView from './views/ScheduleDashboardView';
 import AdLibraryView        from './views/AdLibraryView';
-import DirectPublishView    from './views/DirectPublishView';
 import AIAutomationView    from './views/AIAutomationView';
 import KeywordMonitoringView from './views/KeywordMonitoringView';
 // Admin views
@@ -202,7 +201,6 @@ function AppInner() {
           <Route path="/link-join"      element={<LinkJoinView          accountId={selectedAccountId} accounts={accounts} />} />
           <Route path="/schedules"      element={<ScheduleDashboardView accountId={selectedAccountId} accounts={accounts} />} />
           <Route path="/ad-library"     element={<AdLibraryView        accountId={selectedAccountId} />} />
-          <Route path="/direct-publish" element={<DirectPublishView    accountId={selectedAccountId} accounts={accounts} />} />
           <Route path="/ai-automation" element={<AIAutomationView />} />
           <Route path="/keywords"      element={<KeywordMonitoringView />} />
           <Route path="/diagnostics"   element={<DiagnosticsDashboardView accountId={selectedAccountId} />} />
