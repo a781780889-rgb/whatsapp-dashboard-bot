@@ -3,7 +3,6 @@ const WhatsAppManager = require('../../bot/WhatsAppManager');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const LivePublishService = require('../services/LivePublishService');
 const { queryAll: pgQueryAll } = require('../../lib/postgres');
 
 class BroadcastController {
@@ -468,114 +467,6 @@ class BroadcastController {
         try { return JSON.parse(val); } catch { return fallback; }
     }
 
-    // ════════════════════════════════════════════════════════════
-    //  Live Publish — نشر مباشر مع Socket.IO لحظي
-    // ════════════════════════════════════════════════════════════
-
-    async startLivePublish(req, res) {
-        try {
-            const {
-                account_ids,
-                target_group_jids,
-                exclude_admins    = true,
-                ad_library_ids    = [],
-                custom_content    = '',
-                member_delay_ms   = 1500,
-                group_delay_ms    = 1000,
-                ad_delay_ms       = 2000,
-            } = req.body;
-
-            if (!account_ids?.length)
-                return res.status(400).json({ success: false, error: 'يجب اختيار حساب واحد على الأقل' });
-            if (!target_group_jids?.length)
-                return res.status(400).json({ success: false, error: 'يجب اختيار مجموعة واحدة على الأقل' });
-
-            // جلب الإعلانات من قاعدة بيانات الحساب الأول
-            const firstAccountId = account_ids[0];
-            const accountDB = await DatabaseManager.getAccountDB(firstAccountId);
-
-            const messages = [];
-            for (const adId of (ad_library_ids || [])) {
-                const ad = await accountDB.get(`SELECT * FROM ad_library WHERE id = $1`, [adId]);
-                if (ad) {
-                    messages.push({ adId, name: ad.name, ...this._buildMessageContent(ad) });
-                    await accountDB.run(
-                        `UPDATE ad_library SET use_count = use_count + 1, last_used_at = NOW() WHERE id = $1`, [adId]
-                    ).catch(() => {});
-                }
-            }
-            if (!messages.length) {
-                if (!custom_content?.trim())
-                    return res.status(400).json({ success: false, error: 'يجب إضافة نص أو اختيار إعلان' });
-                messages.push({ adId: null, name: 'رسالة مخصصة', text: custom_content, mediaPaths: [] });
-            }
-
-            // جلب أسماء الحسابات
-            let accountsInfo = [];
-            try {
-                const ph = account_ids.map((_, i) => `$${i + 1}`).join(',');
-                accountsInfo = await pgQueryAll(
-                    `SELECT id, name FROM accounts WHERE id IN (${ph})`, account_ids
-                );
-            } catch { /* fallback */ }
-
-            const sessionId = await LivePublishService.create({
-                accountIds:    account_ids,
-                accountsInfo,
-                groupJids:     target_group_jids,
-                excludeAdmins: exclude_admins,
-                messages,
-                delays: {
-                    memberDelayMs: Math.max(0, Number(member_delay_ms) || 1500),
-                    groupDelayMs:  Math.max(0, Number(group_delay_ms)  || 1000),
-                    adDelayMs:     Math.max(0, Number(ad_delay_ms)     || 2000),
-                },
-            });
-
-            res.json({ success: true, sessionId });
-        } catch (err) {
-            console.error('[LivePublish] startLivePublish error:', err);
-            res.status(500).json({ success: false, error: err.message || 'Internal Server Error' });
-        }
-    }
-
-    async controlLivePublish(req, res) {
-        const { sessionId } = req.params;
-        const { action } = req.body;  // pause | resume | stop
-
-        let ok = false;
-        if (action === 'pause')  ok = LivePublishService.pause(sessionId);
-        if (action === 'resume') ok = LivePublishService.resume(sessionId);
-        if (action === 'stop')   ok = LivePublishService.stop(sessionId);
-
-        if (!ok) return res.status(404).json({ success: false, error: 'الجلسة غير موجودة أو انتهت' });
-        res.json({ success: true, action });
-    }
-
-    async getLivePublishStatus(req, res) {
-        const { sessionId } = req.params;
-        const s = LivePublishService.status(sessionId);
-        if (!s) return res.status(404).json({ success: false, error: 'الجلسة غير موجودة' });
-        res.json({ success: true, ...s });
-    }
-
-    // ── [إصلاح استمرارية اللوحة] إيجاد جلسة نشر مباشر جارية حالياً لأي من
-    //    الحسابات المُرسلة — تستدعيها الواجهة عند فتح الصفحة لإعادة ربط
-    //    اللوحة تلقائياً بالجلسة الحقيقية بدل البدء من صفر (0%) بينما
-    //    العملية لا تزال تعمل فعلياً في الخادم.
-    async getActiveLivePublishSession(req, res) {
-        try {
-            const raw = req.query.account_ids || '';
-            const accountIds = String(raw).split(',').map(s => s.trim()).filter(Boolean);
-            if (!accountIds.length) return res.json({ success: true, session: null });
-
-            const session = await LivePublishService.findActiveSession(accountIds);
-            res.json({ success: true, session });
-        } catch (err) {
-            console.error('[LivePublish] getActiveLivePublishSession error:', err);
-            res.status(500).json({ success: false, error: err.message || 'Internal Server Error' });
-        }
-    }
 }
 
 module.exports = new BroadcastController();
