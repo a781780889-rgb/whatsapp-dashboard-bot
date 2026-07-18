@@ -526,7 +526,7 @@ function TabMembers({ group, accountId }: { group: WaGroup; accountId: string })
             <Button
               size="sm"
               disabled={saving || members.length === 0}
-              className="gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white border-0"
+              className="gap-1.5 bg-[var(--success)] hover:opacity-90 text-[var(--text-on-brand)] border-0"
             >
               {saving
                 ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
@@ -577,7 +577,7 @@ function TabMembers({ group, accountId }: { group: WaGroup; accountId: string })
         ].map(f => (
           <button key={f.id} onClick={() => setFilter(f.id as any)}
             className={cn('px-3 py-1 rounded-lg text-xs font-medium transition-colors',
-              filter === f.id ? 'bg-[var(--brand-primary)] text-white' : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)]')}>
+              filter === f.id ? 'bg-[var(--brand-primary)] text-[var(--text-on-brand)]' : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)]')}>
             {f.label}
           </button>
         ))}
@@ -777,7 +777,7 @@ function GroupAvatar({ group, size = 'md' }: { group: WaGroup; size?: 'sm' | 'md
   }
   return (
     <div className={cn(
-      'rounded-2xl bg-gradient-to-br from-[var(--brand-primary)] to-[var(--brand-secondary)] flex items-center justify-center text-white font-bold shrink-0',
+      'rounded-2xl bg-gradient-to-br from-[var(--brand-primary)] to-[var(--brand-secondary)] flex items-center justify-center text-[var(--text-on-brand)] font-bold shrink-0',
       sizeMap[size]
     )}>
       {initials}
@@ -1286,7 +1286,7 @@ function MemberPublishModal({
                 {/* خيارات الاستثناء */}
                 <div className="flex flex-col gap-2 p-3 bg-[var(--bg-elevated)] rounded-2xl border border-[var(--border-default)]">
                   <p className="text-sm font-bold text-[var(--text-primary)] flex items-center gap-1.5">
-                    <UserMinus className="w-4 h-4 text-orange-400" />
+                    <UserMinus className="w-4 h-4 text-[var(--warning)]" />
                     خيارات الاستثناء
                   </p>
 
@@ -1871,13 +1871,13 @@ function AccountChip({ acc }: { acc: LiveAccountInfo }) {
       className={cn(
         'flex items-center gap-2 px-3 py-2 rounded-xl border shrink-0',
         acc.is_online
-          ? 'bg-green-500/5 border-green-500/20'
+          ? 'bg-[var(--success-bg)] border-[var(--success)]/20'
           : 'bg-[var(--bg-elevated)] border-[var(--border-default)]'
       )}
     >
       <span className={cn(
         'w-2 h-2 rounded-full shrink-0',
-        acc.is_online ? 'bg-green-500 animate-pulse' : 'bg-[var(--text-muted)]'
+        acc.is_online ? 'bg-[var(--success)] animate-pulse' : 'bg-[var(--text-muted)]'
       )} />
       <div className="min-w-0">
         <p className="text-xs font-bold text-[var(--text-primary)] truncate max-w-[120px]">{acc.name}</p>
@@ -1895,10 +1895,10 @@ function SyncProgressRow({ entry }: { entry: SyncProgressEntry }) {
   const icon = entry.status === 'syncing'
     ? <RefreshCw className="w-3.5 h-3.5 text-[var(--brand-primary)] animate-spin shrink-0" />
     : entry.status === 'done'
-    ? <CheckCircle2 className="w-3.5 h-3.5 text-green-500 shrink-0" />
+    ? <CheckCircle2 className="w-3.5 h-3.5 text-[var(--success)] shrink-0" />
     : entry.status === 'unavailable'
     ? <WifiOff className="w-3.5 h-3.5 text-[var(--text-muted)] shrink-0" />
-    : <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0" />;
+    : <AlertCircle className="w-3.5 h-3.5 text-[var(--danger)] shrink-0" />;
 
   const text = entry.status === 'syncing'
     ? 'جارٍ المزامنة الآن...'
@@ -1939,7 +1939,7 @@ function LiveGroupCard({ group, onClick, onQuickPublish }: {
           <div className="flex items-center gap-1.5 mt-1">
             <span className={cn(
               'w-1.5 h-1.5 rounded-full shrink-0',
-              group.account.is_online ? 'bg-green-500' : 'bg-[var(--text-muted)]'
+              group.account.is_online ? 'bg-[var(--success)]' : 'bg-[var(--text-muted)]'
             )} />
             <p className="text-xs text-[var(--text-muted)] truncate">{group.account.name}</p>
           </div>
@@ -1965,21 +1965,35 @@ function LiveGroupCard({ group, onClick, onQuickPublish }: {
         </span>
         <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
           {canPublish && onQuickPublish && (
-            <button
-              onClick={(e) => { e.stopPropagation(); onQuickPublish(group); }}
-              className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-green-500/10 text-green-400 hover:bg-green-500/20 border border-green-500/20 transition-all"
-              title="نشر في هذه المجموعة"
-            >
-              <Send className="w-3 h-3" />نشر
-            </button>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onQuickPublish(group); }}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-[var(--success-bg)] text-[var(--success)] hover:bg-[var(--success-bg)] border border-[var(--success)]/20 transition-all"
+                    aria-label="نشر في هذه المجموعة"
+                  >
+                    <Send className="w-3 h-3" />نشر
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>نشر في هذه المجموعة</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           )}
-          <button
-            onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(group.group_jid); }}
-            className="text-[var(--text-muted)] hover:text-[var(--brand-primary)]"
-            title="نسخ معرّف المجموعة (Group ID)"
-          >
-            <Copy className="w-3 h-3" />
-          </button>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(group.group_jid); }}
+                  className="text-[var(--text-muted)] hover:text-[var(--brand-primary)]"
+                  aria-label="نسخ معرّف المجموعة"
+                >
+                  <Copy className="w-3 h-3" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>نسخ معرّف المجموعة (Group ID)</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
       </div>
     </div>
