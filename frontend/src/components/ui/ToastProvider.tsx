@@ -38,7 +38,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     <ToastContext.Provider value={{ addToast, removeToast }}>
       {children}
       {/* FIX: bottom-center أوضح على الموبايل من top-left */}
-      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[100] flex flex-col gap-3 w-[calc(100%-2rem)] max-w-sm pointer-events-none">
+      <div className="fixed bottom-6 inset-x-0 mx-auto z-[100] flex flex-col gap-3 w-[calc(100%-2rem)] max-w-sm pointer-events-none">
         {toasts.map(toast => (
           <ToastItem key={toast.id} toast={toast} onRemove={() => removeToast(toast.id)} />
         ))}
@@ -56,25 +56,34 @@ function ToastItem({ toast, onRemove }: { toast: Toast; onRemove: () => void }) 
   }, [onRemove, toast.type]);
 
   const icons = {
-    success: <CheckCircle2 className="w-5 h-5 text-green-500" />,
-    error: <XCircle className="w-5 h-5 text-red-500" />,
-    warning: <AlertCircle className="w-5 h-5 text-yellow-500" />,
-    info: <Info className="w-5 h-5 text-blue-500" />
+    success: <CheckCircle2 className="w-5 h-5" style={{ color: 'var(--success)' }} />,
+    error: <XCircle className="w-5 h-5" style={{ color: 'var(--danger)' }} />,
+    warning: <AlertCircle className="w-5 h-5" style={{ color: 'var(--warning)' }} />,
+    info: <Info className="w-5 h-5" style={{ color: 'var(--info)' }} />
   };
 
   const bgs = {
-    success: 'bg-green-500/10 border-green-500/20',
-    error: 'bg-red-500/10 border-red-500/20',
-    warning: 'bg-yellow-500/10 border-yellow-500/20',
-    info: 'bg-blue-500/10 border-blue-500/20'
+    success: 'border-[color:rgba(34,197,94,0.25)]',
+    error: 'border-[color:rgba(239,68,68,0.25)]',
+    warning: 'border-[color:rgba(245,158,11,0.25)]',
+    info: 'border-[color:rgba(59,130,246,0.25)]'
+  };
+  const toastBg = {
+    success: 'var(--success-bg)',
+    error: 'var(--danger-bg)',
+    warning: 'var(--warning-bg)',
+    info: 'var(--info-bg)',
   };
 
   return (
-    <div className={cn(
-      "pointer-events-auto flex items-start gap-3 p-4 rounded-xl border backdrop-blur-md shadow-elevated",
-      "animate-slide-in-r transition-all duration-300",
-      "bg-surface", bgs[toast.type]
-    )}>
+    <div
+      className={cn(
+        "pointer-events-auto flex items-start gap-3 p-4 rounded-xl border backdrop-blur-md shadow-elevated",
+        "animate-slide-in-r transition-all duration-300",
+        "bg-surface", bgs[toast.type]
+      )}
+      style={{ backgroundColor: toastBg[toast.type] }}
+    >
       {icons[toast.type]}
       <div className="flex-1">
         <h4 className="text-sm font-semibold text-primary">{toast.title}</h4>
