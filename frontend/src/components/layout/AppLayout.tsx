@@ -74,6 +74,7 @@ export function AppLayout({
           selectedAccountId={selectedAccountId}
           onAccountChange={onAccountChange}
           currentUser={currentUser}
+          onLogout={onLogout}
         />
         <main id="main-content" className="flex-1 overflow-auto p-6 scroll-smooth">
           <div className="max-w-7xl mx-auto w-full h-full">
