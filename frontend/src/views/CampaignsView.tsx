@@ -5,7 +5,12 @@ import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Progress } from '@/components/ui/progress';
-import { Play, Pause, Trash2, Plus, Megaphone, Smartphone, Check, Loader2 } from 'lucide-react';
+import { StatCard } from '@/components/ui/stat-card';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Alert } from '@/components/ui/alert';
+import { Switch } from '@/components/ui/switch';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Play, Pause, Trash2, Plus, Megaphone, Smartphone, Check, Loader2, ListChecks, Users, Send } from 'lucide-react';
 import { cn } from '@/utils/cn';
 import { authFetch, API } from '@/utils/api';
 
@@ -24,18 +29,16 @@ interface Ad { id: string; name: string; content: string; }
 interface Group { id: string; name: string; participants_count?: number; }
 
 function StatusBadge({ status }: { status: string }) {
-  const map: Record<string, { label: string; cls: string }> = {
-    active:    { label: 'نشطة',    cls: 'bg-green-500/10 text-green-500' },
-    running:   { label: 'تعمل',    cls: 'bg-blue-500/10 text-blue-500' },
-    paused:    { label: 'متوقفة',  cls: 'bg-yellow-500/10 text-yellow-500' },
-    completed: { label: 'مكتملة',  cls: 'bg-[var(--bg-elevated)] text-[var(--text-secondary)]' },
-    pending:   { label: 'معلقة',   cls: 'bg-purple-500/10 text-purple-500' },
-    failed:    { label: 'فشلت',    cls: 'bg-red-500/10 text-red-500' },
+  const map: Record<string, { label: string; variant: 'success' | 'info' | 'warning' | 'secondary' | 'soft' | 'danger' }> = {
+    active:    { label: 'نشطة',    variant: 'success' },
+    running:   { label: 'تعمل',    variant: 'info' },
+    paused:    { label: 'متوقفة',  variant: 'warning' },
+    completed: { label: 'مكتملة',  variant: 'secondary' },
+    pending:   { label: 'معلقة',   variant: 'soft' },
+    failed:    { label: 'فشلت',    variant: 'danger' },
   };
-  const cfg = map[status] || { label: status, cls: 'bg-[var(--bg-elevated)] text-[var(--text-muted)]' };
-  return (
-    <Badge variant="outline" className={cn('border-0 font-medium', cfg.cls)}>{cfg.label}</Badge>
-  );
+  const cfg = map[status] || { label: status, variant: 'secondary' as const };
+  return <Badge variant={cfg.variant} dot>{cfg.label}</Badge>;
 }
 
 export default function CampaignsView({ accountId }: { accountId: string | null }) {
@@ -175,20 +178,11 @@ export default function CampaignsView({ accountId }: { accountId: string | null 
         </Button>
       </div>
 
-      <div className="grid grid-cols-4 gap-4">
-        {[
-          { label: 'إجمالي', value: total, color: 'text-blue-500' },
-          { label: 'نشطة', value: active, color: 'text-green-500' },
-          { label: 'متوقفة', value: paused, color: 'text-yellow-500' },
-          { label: 'مكتملة', value: completed, color: 'text-gray-500' },
-        ].map((stat, i) => (
-          <Card key={i} className="card">
-            <CardContent className="p-4 flex items-center justify-between">
-              <span className="text-sm font-medium text-[var(--text-secondary)]">{stat.label}</span>
-              <span className={cn('text-xl font-bold', stat.color)}>{stat.value}</span>
-            </CardContent>
-          </Card>
-        ))}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatCard title="إجمالي الحملات" value={total} icon={Megaphone} color="var(--info)" />
+        <StatCard title="نشطة" value={active} icon={Play} color="var(--success)" />
+        <StatCard title="متوقفة" value={paused} icon={Pause} color="var(--warning)" />
+        <StatCard title="مكتملة" value={completed} icon={Check} color="var(--text-muted)" />
       </div>
 
       <Card className="card flex-1 overflow-hidden flex flex-col">
@@ -198,15 +192,13 @@ export default function CampaignsView({ accountId }: { accountId: string | null 
               <Loader2 className="w-8 h-8 animate-spin text-[var(--brand-primary)]" />
             </div>
           ) : campaigns.length === 0 ? (
-            <div className="flex items-center justify-center p-12">
-              <div className="text-center">
-                <Megaphone className="w-12 h-12 text-[var(--text-muted)] mx-auto mb-3" />
-                <p className="text-[var(--text-secondary)]">لا توجد حملات بعد</p>
-                <Button className="mt-4" onClick={() => { setStep(1); setIsWizardOpen(true); }}>
-                  <Plus className="w-4 h-4" /> إنشاء حملة
-                </Button>
-              </div>
-            </div>
+            <EmptyState
+              icon={Megaphone}
+              title="لا توجد حملات بعد"
+              description="أنشئ حملتك الأولى لبدء الإرسال الجماعي لمجموعاتك المستهدفة."
+              actionLabel="إنشاء حملة"
+              onAction={() => { setStep(1); setIsWizardOpen(true); }}
+            />
           ) : (
             <Table>
               <TableHeader className="bg-[var(--bg-elevated)] sticky top-0 z-10 shadow-sm">
@@ -244,16 +236,34 @@ export default function CampaignsView({ accountId }: { accountId: string | null 
                       <TableCell>
                         <div className="flex gap-1 opacity-50 group-hover:opacity-100 transition-opacity">
                           {!['active', 'running', 'completed'].includes(camp.status) && (
-                            <Button variant="ghost" size="icon" className="h-8 w-8 text-green-500 hover:text-green-500 hover:bg-green-500/10" onClick={() => handleStart(camp.id)}>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-[var(--success)] hover:text-[var(--success)] hover:bg-[var(--success-bg)]"
+                              onClick={() => handleStart(camp.id)}
+                              aria-label="بدء الحملة"
+                            >
                               <Play className="w-4 h-4" />
                             </Button>
                           )}
                           {['active', 'running'].includes(camp.status) && (
-                            <Button variant="ghost" size="icon" className="h-8 w-8 text-yellow-500 hover:text-yellow-500 hover:bg-yellow-500/10" onClick={() => handlePause(camp.id)}>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-[var(--warning)] hover:text-[var(--warning)] hover:bg-[var(--warning-bg)]"
+                              onClick={() => handlePause(camp.id)}
+                              aria-label="إيقاف الحملة مؤقتًا"
+                            >
                               <Pause className="w-4 h-4" />
                             </Button>
                           )}
-                          <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500 hover:text-red-500 hover:bg-red-500/10" onClick={() => handleDelete(camp.id)}>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-[var(--danger)] hover:text-[var(--danger)] hover:bg-[var(--danger-bg)]"
+                            onClick={() => handleDelete(camp.id)}
+                            aria-label="حذف الحملة"
+                          >
                             <Trash2 className="w-4 h-4" />
                           </Button>
                         </div>
@@ -275,15 +285,25 @@ export default function CampaignsView({ accountId }: { accountId: string | null 
           </DialogHeader>
 
           <div className="flex items-center justify-center gap-2 py-4">
-            {[1, 2, 3, 4].map(s => (
+            {[
+              { n: 1, label: 'الإعلان' },
+              { n: 2, label: 'المجموعات' },
+              { n: 3, label: 'القواعد' },
+              { n: 4, label: 'الإرسال' },
+            ].map(({ n: s, label }) => (
               <React.Fragment key={s}>
-                <div className={cn('w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold transition-colors',
-                  step === s ? 'bg-[var(--brand-primary)] text-white shadow-[var(--shadow-glow)]'
-                  : step > s ? 'bg-[var(--brand-primary-light)] text-[var(--brand-primary)]'
-                  : 'bg-[var(--bg-elevated)] text-[var(--text-muted)]')}>
-                  {step > s ? <Check className="w-4 h-4" /> : s}
+                <div className="flex flex-col items-center gap-1.5">
+                  <div className={cn('w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold transition-colors',
+                    step === s ? 'bg-[var(--brand-primary)] text-white shadow-[var(--shadow-glow)]'
+                    : step > s ? 'bg-[var(--brand-primary-light)] text-[var(--brand-primary)]'
+                    : 'bg-[var(--bg-elevated)] text-[var(--text-muted)]')}>
+                    {step > s ? <Check className="w-4 h-4" /> : s}
+                  </div>
+                  <span className={cn('text-[10px] font-medium', step === s ? 'text-[var(--brand-primary)]' : 'text-[var(--text-muted)]')}>
+                    {label}
+                  </span>
                 </div>
-                {s < 4 && <div className={cn('w-12 h-1 rounded-full transition-colors', step > s ? 'bg-[var(--brand-primary-light)]' : 'bg-[var(--bg-elevated)]')} />}
+                {s < 4 && <div className={cn('w-12 h-1 rounded-full transition-colors mb-4', step > s ? 'bg-[var(--brand-primary-light)]' : 'bg-[var(--bg-elevated)]')} />}
               </React.Fragment>
             ))}
           </div>
@@ -292,13 +312,19 @@ export default function CampaignsView({ accountId }: { accountId: string | null 
             {step === 1 && (
               <div className="flex flex-col gap-4 animate-fade-in">
                 <div className="flex flex-col gap-2">
-                  <label className="text-sm font-medium">اسم الحملة <span className="text-red-500">*</span></label>
-                  <input className="input" placeholder="أدخل اسماً مميزاً للحملة..." value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+                  <label htmlFor="campaign-name" className="text-sm font-medium">اسم الحملة <span className="text-[var(--danger)]">*</span></label>
+                  <input
+                    id="campaign-name"
+                    className="input"
+                    placeholder="أدخل اسماً مميزاً للحملة..."
+                    value={form.name}
+                    onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                  />
                 </div>
                 <div className="flex flex-col gap-2 mt-4">
-                  <label className="text-sm font-medium">اختر الإعلان من المكتبة <span className="text-red-500">*</span></label>
+                  <label className="text-sm font-medium">اختر الإعلان من المكتبة <span className="text-[var(--danger)]">*</span></label>
                   {ads.length === 0 ? (
-                    <p className="text-sm text-yellow-500 p-3 bg-yellow-500/10 rounded-lg">لا توجد إعلانات. أضف إعلاناً من مكتبة الإعلانات أولاً.</p>
+                    <Alert variant="warning">لا توجد إعلانات. أضف إعلاناً من مكتبة الإعلانات أولاً.</Alert>
                   ) : (
                     <div className="grid grid-cols-2 gap-3 max-h-64 overflow-auto">
                       {ads.map(ad => (
@@ -327,7 +353,11 @@ export default function CampaignsView({ accountId }: { accountId: string | null 
                     <p className="p-4 text-sm text-[var(--text-muted)]">لا توجد مجموعات</p>
                   ) : groups.map(g => (
                     <label key={g.id} className="flex items-center gap-3 p-3 border-b border-[var(--border-default)] last:border-0 hover:bg-[var(--bg-elevated)] cursor-pointer">
-                      <input type="checkbox" checked={form.target_ids.includes(g.id)} onChange={() => toggleGroup(g.id)} className="w-4 h-4 rounded" />
+                      <Checkbox
+                        checked={form.target_ids.includes(g.id)}
+                        onCheckedChange={() => toggleGroup(g.id)}
+                        aria-label={`اختيار مجموعة ${g.name}`}
+                      />
                       <div className="flex-1">
                         <p className="font-medium text-[var(--text-primary)]">{g.name}</p>
                         {g.participants_count !== undefined && <p className="text-xs text-[var(--text-muted)]">{g.participants_count} عضو</p>}
@@ -341,24 +371,28 @@ export default function CampaignsView({ accountId }: { accountId: string | null 
               <div className="flex flex-col gap-6 animate-fade-in">
                 <h3 className="font-bold text-[var(--text-primary)]">قواعد الاستبعاد والإرسال</h3>
                 <div className="flex flex-col gap-4">
-                  <label className="flex items-center justify-between p-4 border border-[var(--border-default)] rounded-xl bg-[var(--bg-elevated)] cursor-pointer" onClick={() => setForm(f => ({ ...f, exclude_admins: !f.exclude_admins }))}>
+                  <div className="flex items-center justify-between p-4 border border-[var(--border-default)] rounded-xl bg-[var(--bg-elevated)]">
                     <div>
                       <p className="font-medium text-[var(--text-primary)]">استبعاد المشرفين</p>
                       <p className="text-xs text-[var(--text-muted)] mt-1">لا ترسل رسائل لمشرفي المجموعات.</p>
                     </div>
-                    <div className={cn('w-10 h-6 rounded-full relative transition-colors', form.exclude_admins ? 'bg-[var(--brand-primary)]' : 'bg-[var(--bg-surface)] border border-[var(--border-strong)]')}>
-                      <div className={cn('absolute top-1 w-4 h-4 bg-white rounded-full transition-all shadow-sm', form.exclude_admins ? 'right-1' : 'left-1')} />
-                    </div>
-                  </label>
-                  <label className="flex items-center justify-between p-4 border border-[var(--border-default)] rounded-xl bg-[var(--bg-elevated)] cursor-pointer" onClick={() => setForm(f => ({ ...f, exclude_duplicates: !f.exclude_duplicates }))}>
+                    <Switch
+                      checked={form.exclude_admins}
+                      onCheckedChange={v => setForm(f => ({ ...f, exclude_admins: v }))}
+                      aria-label="استبعاد المشرفين"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between p-4 border border-[var(--border-default)] rounded-xl bg-[var(--bg-elevated)]">
                     <div>
                       <p className="font-medium text-[var(--text-primary)]">منع التكرار</p>
                       <p className="text-xs text-[var(--text-muted)] mt-1">إرسال رسالة واحدة فقط للرقم حتى لو تواجد في عدة مجموعات.</p>
                     </div>
-                    <div className={cn('w-10 h-6 rounded-full relative transition-colors', form.exclude_duplicates ? 'bg-[var(--brand-primary)]' : 'bg-[var(--bg-surface)] border border-[var(--border-strong)]')}>
-                      <div className={cn('absolute top-1 w-4 h-4 bg-white rounded-full transition-all shadow-sm', form.exclude_duplicates ? 'right-1' : 'left-1')} />
-                    </div>
-                  </label>
+                    <Switch
+                      checked={form.exclude_duplicates}
+                      onCheckedChange={v => setForm(f => ({ ...f, exclude_duplicates: v }))}
+                      aria-label="منع التكرار"
+                    />
+                  </div>
                 </div>
               </div>
             )}
@@ -367,8 +401,13 @@ export default function CampaignsView({ accountId }: { accountId: string | null 
                 <h3 className="font-bold text-[var(--text-primary)]">إعدادات الإرسال للحماية</h3>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="flex flex-col gap-2">
-                    <label className="text-sm font-medium">الفاصل بين الرسائل (ثانية)</label>
-                    <select className="input" value={form.interval_seconds} onChange={e => setForm(f => ({ ...f, interval_seconds: Number(e.target.value) }))}>
+                    <label htmlFor="interval-seconds" className="text-sm font-medium">الفاصل بين الرسائل (ثانية)</label>
+                    <select
+                      id="interval-seconds"
+                      className="input"
+                      value={form.interval_seconds}
+                      onChange={e => setForm(f => ({ ...f, interval_seconds: Number(e.target.value) }))}
+                    >
                       <option value={10}>10 ثواني (سريع)</option>
                       <option value={15}>15 ثانية (موصى به)</option>
                       <option value={30}>30 ثانية (آمن)</option>
@@ -376,11 +415,17 @@ export default function CampaignsView({ accountId }: { accountId: string | null 
                     </select>
                   </div>
                   <div className="flex flex-col gap-2">
-                    <label className="text-sm font-medium">الحد الأقصى اليومي</label>
-                    <input className="input" type="number" value={form.daily_limit} onChange={e => setForm(f => ({ ...f, daily_limit: Number(e.target.value) }))} />
+                    <label htmlFor="daily-limit" className="text-sm font-medium">الحد الأقصى اليومي</label>
+                    <input
+                      id="daily-limit"
+                      className="input"
+                      type="number"
+                      value={form.daily_limit}
+                      onChange={e => setForm(f => ({ ...f, daily_limit: Number(e.target.value) }))}
+                    />
                   </div>
                 </div>
-                {error && <p className="text-sm text-red-500 bg-red-500/10 p-3 rounded-lg">{error}</p>}
+                {error && <Alert variant="danger" onDismiss={() => setError('')}>{error}</Alert>}
               </div>
             )}
           </div>
