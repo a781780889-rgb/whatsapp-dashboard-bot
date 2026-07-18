@@ -2,25 +2,37 @@ import React, { useState } from 'react';
 import { Eye, EyeOff, Loader2, Code2, Phone, Shield, Zap } from 'lucide-react';
 import { API } from '../utils/api';
 import { useToast } from './ui/ToastProvider';
+import { Alert } from './ui/alert';
+import { Checkbox } from './ui/checkbox';
 
 interface LoginPageProps {
   onLogin: (accessToken: string, refreshToken: string, user: any) => void;
 }
 
+const REMEMBER_KEY = 'wa-dashboard-remember-username';
+
 export default function LoginPage({ onLogin }: LoginPageProps) {
-  const [username, setUsername] = useState('');
+  const [username, setUsername] = useState(() => {
+    try { return localStorage.getItem(REMEMBER_KEY) ?? ''; } catch { return ''; }
+  });
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [rememberMe, setRememberMe] = useState(() => {
+    try { return !!localStorage.getItem(REMEMBER_KEY); } catch { return false; }
+  });
+  const [formError, setFormError] = useState<string | null>(null);
   const { addToast } = useToast();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError(null);
+
     if (!username || !password) {
-      addToast({ title: 'خطأ', description: 'الرجاء إدخال اسم المستخدم وكلمة المرور', type: 'error' });
+      setFormError('الرجاء إدخال اسم المستخدم وكلمة المرور');
       return;
     }
-    
+
     setLoading(true);
     try {
       const res = await fetch(`${API}/auth/login`, {
@@ -29,14 +41,19 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
         body: JSON.stringify({ username, password })
       });
       const data = await res.json();
-      
+
       if (res.ok && data.success) {
+        try {
+          if (rememberMe) localStorage.setItem(REMEMBER_KEY, username);
+          else localStorage.removeItem(REMEMBER_KEY);
+        } catch { /* localStorage may be unavailable, ignore safely */ }
+        addToast({ title: 'مرحبًا بعودتك', description: 'تم تسجيل الدخول بنجاح', type: 'success' });
         onLogin(data.accessToken, data.refreshToken, data.user);
       } else {
-        addToast({ title: 'فشل تسجيل الدخول', description: data.error || 'بيانات الاعتماد غير صحيحة', type: 'error' });
+        setFormError(data.error || 'بيانات الاعتماد غير صحيحة');
       }
     } catch (err) {
-      addToast({ title: 'خطأ في الاتصال', description: 'تعذر الاتصال بالخادم', type: 'error' });
+      setFormError('تعذر الاتصال بالخادم، الرجاء المحاولة مجددًا');
     } finally {
       setLoading(false);
     }
@@ -65,47 +82,69 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
         </div>
 
         {/* Login Form */}
-        <form onSubmit={handleSubmit} className="bg-[var(--bg-surface)] border border-[var(--border-default)] p-8 rounded-3xl shadow-elevated flex flex-col gap-5 relative overflow-hidden">
+        <form onSubmit={handleSubmit} className="bg-[var(--bg-surface)] border border-[var(--border-default)] p-8 rounded-3xl shadow-[var(--shadow-elevated)] flex flex-col gap-5 relative overflow-hidden">
           {/* subtle top border highlight */}
           <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-[var(--brand-primary)] to-transparent opacity-50" />
 
+          {formError && (
+            <Alert variant="danger" onDismiss={() => setFormError(null)}>
+              {formError}
+            </Alert>
+          )}
+
           <div className="flex flex-col gap-1.5">
-            <label className="text-sm font-medium text-[var(--text-secondary)]">اسم المستخدم</label>
+            <label htmlFor="login-username" className="text-sm font-medium text-[var(--text-secondary)]">اسم المستخدم</label>
             <input 
+              id="login-username"
               type="text" 
               value={username}
               onChange={e => setUsername(e.target.value)}
               className="input dir-ltr text-left font-mono"
               placeholder="admin"
               disabled={loading}
+              autoComplete="username"
+              autoFocus
             />
           </div>
 
           <div className="flex flex-col gap-1.5 relative">
-            <label className="text-sm font-medium text-[var(--text-secondary)]">كلمة المرور</label>
+            <label htmlFor="login-password" className="text-sm font-medium text-[var(--text-secondary)]">كلمة المرور</label>
             <div className="relative">
               <input 
+                id="login-password"
                 type={showPassword ? 'text' : 'password'}
                 value={password}
                 onChange={e => setPassword(e.target.value)}
                 className="input dir-ltr text-left font-mono pr-10"
                 placeholder="••••••••"
                 disabled={loading}
+                autoComplete="current-password"
               />
               <button 
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
+                aria-label={showPassword ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور'}
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)] rounded-md"
               >
                 {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
             </div>
           </div>
 
+          <label className="flex items-center gap-2.5 cursor-pointer select-none -mt-1">
+            <Checkbox
+              checked={rememberMe}
+              onCheckedChange={setRememberMe}
+              disabled={loading}
+              aria-label="تذكرني"
+            />
+            <span className="text-sm text-[var(--text-secondary)]">تذكر اسم المستخدم</span>
+          </label>
+
           <button 
             type="submit" 
             disabled={loading}
-            className="mt-4 h-12 rounded-xl font-bold text-white bg-gradient-to-r from-[var(--brand-primary)] to-[#008f6e] hover:brightness-110 active:scale-[0.98] transition-all flex items-center justify-center gap-2 shadow-[var(--shadow-glow)] disabled:opacity-70 disabled:pointer-events-none"
+            className="mt-3 h-12 rounded-xl font-bold text-white bg-gradient-to-r from-[var(--brand-primary)] to-[#008f6e] hover:brightness-110 active:scale-[0.98] transition-all flex items-center justify-center gap-2 shadow-[var(--shadow-glow)] disabled:opacity-70 disabled:pointer-events-none"
           >
             {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'تسجيل الدخول'}
           </button>
