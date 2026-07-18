@@ -1,15 +1,22 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Search, Plus, Smartphone, Trash2, Link as LinkIcon, AlertCircle,
+  Search, Plus, Smartphone, Trash2,
   RotateCcw, Play, Square, RefreshCw, ChevronDown, Activity,
-  Megaphone, Users, Eye, Ban, Settings, FileText, Wifi, WifiOff,
-  BarChart2, Clock, MessageSquare, X
+  Megaphone, Users, Eye, Ban, Settings, FileText, Wifi,
+  BarChart2, Clock, Check,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { StatCard } from '@/components/ui/stat-card';
+import { EmptyState } from '@/components/ui/empty-state';
+import {
+  DropdownMenu, DropdownMenuTrigger, DropdownMenuContent,
+  DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator,
+} from '@/components/ui/dropdown-menu';
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip';
 import { useToast } from '@/components/ui/ToastProvider';
 import { API, authFetch } from '@/utils/api';
 import { cn } from '@/utils/cn';
@@ -18,76 +25,48 @@ import { ConnectionMethodModal } from '@/components/ConnectionMethodModal';
 const SOCKET_URL = API.replace('/api/v1', '');
 
 // ── تعريف الأدوار ─────────────────────────────────────────────────────────────
+// الألوان الآن مرتبطة بـ design tokens (نفس نمط الجولة 2/3) بدل درجات Tailwind الثابتة،
+// مع الإبقاء على لون مميز لكل دور عبر hex ثابت يُغذّي color-mix في StatCard/الشارات.
 const ROLES = [
   {
     id: 'publisher',
     label: 'ناشر',
     icon: Megaphone,
-    color: 'text-blue-400',
-    bg: 'bg-blue-500/15',
-    border: 'border-blue-500/30',
-    barColor: 'bg-blue-500',
+    swatch: '#4f8ef7', // brand-secondary-500
     description: 'ينشر الإعلانات في المجموعات',
   },
   {
     id: 'searcher',
     label: 'باحث',
     icon: Search,
-    color: 'text-purple-400',
-    bg: 'bg-purple-500/15',
-    border: 'border-purple-500/30',
-    barColor: 'bg-purple-500',
+    swatch: '#a855f7',
     description: 'يبحث ويفهرس روابط المجموعات',
   },
   {
     id: 'joiner',
     label: 'منضم',
     icon: Users,
-    color: 'text-yellow-400',
-    bg: 'bg-yellow-500/15',
-    border: 'border-yellow-500/30',
-    barColor: 'bg-yellow-500',
+    swatch: 'var(--warning)',
     description: 'ينضم للمجموعات تلقائياً',
   },
   {
     id: 'monitor',
     label: 'مراقب',
     icon: Eye,
-    color: 'text-cyan-400',
-    bg: 'bg-cyan-500/15',
-    border: 'border-cyan-500/30',
-    barColor: 'bg-cyan-500',
+    swatch: '#06b6d4',
     description: 'يراقب المجموعات ويكتشف الروابط',
   },
   {
     id: 'stopped',
     label: 'متوقف',
     icon: Ban,
-    color: 'text-[var(--text-muted)]',
-    bg: 'bg-[var(--bg-elevated)]',
-    border: 'border-[var(--border-default)]',
-    barColor: 'bg-gray-600',
+    swatch: 'var(--text-muted)',
     description: 'موقوف مؤقتاً',
   },
 ];
 
 function getRoleInfo(roleId: string) {
   return ROLES.find(r => r.id === roleId) || ROLES[ROLES.length - 1];
-}
-
-// ── بطاقة الملخص العلوي ───────────────────────────────────────────────────────
-function SummaryCard({ label, value, icon: Icon, color }: any) {
-  return (
-    <div className="flex items-center gap-3 bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-xl p-3">
-      <div className={cn('w-9 h-9 rounded-lg flex items-center justify-center', color.replace('text-', 'bg-').replace('400', '500/15'))}>
-        <Icon className={cn('w-4 h-4', color)} />
-      </div>
-      <div>
-        <p className="text-xs text-[var(--text-muted)]">{label}</p>
-        <p className="text-lg font-bold text-[var(--text-primary)]">{value}</p>
-      </div>
-    </div>
-  );
 }
 
 // ── بطاقة الحساب ─────────────────────────────────────────────────────────────
@@ -105,7 +84,6 @@ function AccountCard({
   onTest,
   onViewLogs,
 }: any) {
-  const [showRoleMenu, setShowRoleMenu] = useState(false);
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
   const role = getRoleInfo(account.role);
   const RoleIcon = role.icon;
@@ -120,10 +98,10 @@ function AccountCard({
   return (
     <Card className={cn(
       'relative overflow-hidden flex flex-col group transition-all duration-200',
-      selected ? 'ring-2 ring-[var(--brand-primary)] shadow-lg shadow-[var(--brand-primary)]/10' : 'hover:border-[var(--border-strong)]'
+      selected ? 'ring-2 ring-[var(--brand-primary)] shadow-[var(--shadow-lg)]' : 'hover:border-[var(--border-strong)]'
     )}>
       {/* شريط الدور (أعلى البطاقة) */}
-      <div className={cn('absolute top-0 left-0 w-full h-1', role.barColor)} />
+      <div className="absolute top-0 left-0 w-full h-1" style={{ backgroundColor: role.swatch }} />
 
       <CardContent className="p-4 flex flex-col gap-3 pt-5">
         {/* رأس البطاقة */}
@@ -134,10 +112,11 @@ function AccountCard({
                 <Smartphone className="w-5 h-5 text-[var(--text-primary)]" />
               </div>
               {/* مؤشر الاتصال */}
-              <span className={cn(
-                'absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-[var(--bg-surface)]',
-                isConnected ? 'bg-green-500' : 'bg-red-500'
-              )} />
+              <span
+                className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-[var(--bg-surface)]"
+                style={{ backgroundColor: isConnected ? 'var(--success)' : 'var(--danger)' }}
+                aria-hidden="true"
+              />
             </div>
             <div>
               <h3 className="font-bold text-[var(--text-primary)] text-sm leading-tight">{account.name}</h3>
@@ -148,16 +127,18 @@ function AccountCard({
           </div>
 
           {/* شارة الدور */}
-          <div className={cn(
-            'flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-medium border',
-            role.bg, role.color, role.border
-          )}>
+          <Badge
+            dot={isRunning}
+            className="border"
+            style={{
+              backgroundColor: `color-mix(in srgb, ${role.swatch} 14%, transparent)`,
+              color: role.swatch,
+              borderColor: `color-mix(in srgb, ${role.swatch} 30%, transparent)`,
+            }}
+          >
             <RoleIcon className="w-3 h-3" />
             <span>{role.label}</span>
-            {isRunning && (
-              <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-            )}
-          </div>
+          </Badge>
         </div>
 
         {/* إحصائيات سريعة */}
@@ -170,7 +151,7 @@ function AccountCard({
           </div>
           <div className="border-r border-l border-[var(--border-default)]">
             <p className="text-[10px] text-[var(--text-muted)]">الحالة</p>
-            <p className={cn('text-xs font-bold', isConnected ? 'text-green-400' : 'text-red-400')}>
+            <p className="text-xs font-bold" style={{ color: isConnected ? 'var(--success)' : 'var(--danger)' }}>
               {isConnected ? 'متصل' : 'مفصول'}
             </p>
           </div>
@@ -185,154 +166,199 @@ function AccountCard({
         </div>
 
         {/* أزرار التحكم الرئيسية */}
-        <div className="flex gap-1.5">
-          <Button
-            variant={selected ? 'default' : 'outline'}
-            className="flex-1 text-xs h-8"
-            onClick={() => onSelect(account.id)}
-          >
-            {selected ? 'مُحدد ✓' : 'تحديد'}
-          </Button>
-
-          {/* تشغيل/إيقاف المهام */}
-          {isConnected && account.role !== 'stopped' && (
-            isRunning ? (
-              <Button
-                variant="outline"
-                className="px-2 h-8 text-orange-400 hover:bg-orange-400/10 hover:text-orange-400 border-orange-400/30"
-                onClick={() => action(() => onStop(account.id), 'stop')}
-                disabled={loadingAction === 'stop'}
-                title="إيقاف المهام"
-              >
-                {loadingAction === 'stop'
-                  ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  : <Square className="w-3.5 h-3.5" />
-                }
-              </Button>
-            ) : (
-              <Button
-                variant="outline"
-                className="px-2 h-8 text-green-400 hover:bg-green-400/10 hover:text-green-400 border-green-400/30"
-                onClick={() => action(() => onStart(account.id), 'start')}
-                disabled={loadingAction === 'start'}
-                title="تشغيل المهام"
-              >
-                {loadingAction === 'start'
-                  ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  : <Play className="w-3.5 h-3.5" />
-                }
-              </Button>
-            )
-          )}
-
-          {/* إعادة تشغيل */}
-          {isConnected && (
+        <TooltipProvider delayDuration={300}>
+          <div className="flex gap-1.5">
             <Button
-              variant="outline"
-              className="px-2 h-8 hover:bg-blue-400/10 hover:text-blue-400"
-              onClick={() => action(() => onRestart(account.id), 'restart')}
-              disabled={loadingAction === 'restart'}
-              title="إعادة تشغيل"
+              variant={selected ? 'default' : 'outline'}
+              className="flex-1 text-xs h-8"
+              onClick={() => onSelect(account.id)}
+              aria-pressed={selected}
             >
-              <RotateCcw className={cn('w-3.5 h-3.5', loadingAction === 'restart' ? 'animate-spin' : '')} />
-            </Button>
-          )}
-        </div>
-
-        {/* أزرار ثانوية */}
-        <div className="flex gap-1.5">
-          {/* تغيير الدور */}
-          <div className="relative flex-1">
-            <Button
-              variant="outline"
-              className="w-full text-xs h-7 gap-1 justify-between"
-              onClick={() => setShowRoleMenu(!showRoleMenu)}
-            >
-              <span className="flex items-center gap-1">
-                <Settings className="w-3 h-3" />
-                <span>الدور</span>
-              </span>
-              <ChevronDown className={cn('w-3 h-3 transition-transform', showRoleMenu ? 'rotate-180' : '')} />
+              {selected && <Check className="w-3.5 h-3.5" />}
+              {selected ? 'مُحدد' : 'تحديد'}
             </Button>
 
-            {showRoleMenu && (
-              <div className="absolute bottom-full left-0 right-0 mb-1 bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-lg overflow-hidden z-50 shadow-xl">
-                {ROLES.map(r => {
-                  const RI = r.icon;
-                  return (
-                    <button
-                      key={r.id}
-                      className={cn(
-                        'w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-[var(--bg-surface)] transition-colors',
-                        account.role === r.id ? 'bg-[var(--bg-surface)]' : ''
-                      )}
-                      onClick={() => { onRoleChange(account.id, r.id); setShowRoleMenu(false); }}
+            {/* تشغيل/إيقاف المهام */}
+            {isConnected && account.role !== 'stopped' && (
+              isRunning ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className="px-2 h-8"
+                      style={{ color: 'var(--warning)', borderColor: 'color-mix(in srgb, var(--warning) 30%, transparent)' }}
+                      onClick={() => action(() => onStop(account.id), 'stop')}
+                      disabled={loadingAction === 'stop'}
+                      aria-label="إيقاف المهام"
                     >
-                      <RI className={cn('w-3 h-3', r.color)} />
-                      <span className="text-[var(--text-primary)]">{r.label}</span>
-                      <span className="text-[var(--text-muted)] mr-auto">{r.description}</span>
-                      {account.role === r.id && <span className="text-green-400">✓</span>}
-                    </button>
-                  );
-                })}
-              </div>
+                      {loadingAction === 'stop'
+                        ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        : <Square className="w-3.5 h-3.5" />
+                      }
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>إيقاف المهام</TooltipContent>
+                </Tooltip>
+              ) : (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className="px-2 h-8"
+                      style={{ color: 'var(--success)', borderColor: 'color-mix(in srgb, var(--success) 30%, transparent)' }}
+                      onClick={() => action(() => onStart(account.id), 'start')}
+                      disabled={loadingAction === 'start'}
+                      aria-label="تشغيل المهام"
+                    >
+                      {loadingAction === 'start'
+                        ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        : <Play className="w-3.5 h-3.5" />
+                      }
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>تشغيل المهام</TooltipContent>
+                </Tooltip>
+              )
+            )}
+
+            {/* إعادة تشغيل */}
+            {isConnected && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className="px-2 h-8 hover:text-[var(--info)]"
+                    onClick={() => action(() => onRestart(account.id), 'restart')}
+                    disabled={loadingAction === 'restart'}
+                    aria-label="إعادة تشغيل"
+                  >
+                    <RotateCcw className={cn('w-3.5 h-3.5', loadingAction === 'restart' ? 'animate-spin' : '')} />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>إعادة تشغيل</TooltipContent>
+              </Tooltip>
             )}
           </div>
 
-          {/* ربط واتساب */}
-          {!isConnected && (
-            <Button
-              variant="outline"
-              className="px-2 h-7 hover:bg-green-400/10 hover:text-green-400"
-              onClick={() => onConnect(account.id)}
-              title="ربط واتساب"
-            >
-              <Wifi className="w-3 h-3" />
-            </Button>
-          )}
+          {/* أزرار ثانوية */}
+          <div className="flex gap-1.5">
+            {/* تغيير الدور — DropdownMenu بدل div يدوي غير مُتاح بلوحة المفاتيح */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  className="flex-1 text-xs h-7 gap-1 justify-between"
+                  aria-label={`تغيير دور الحساب، الدور الحالي ${role.label}`}
+                >
+                  <span className="flex items-center gap-1">
+                    <Settings className="w-3 h-3" />
+                    <span>الدور</span>
+                  </span>
+                  <ChevronDown className="w-3 h-3" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-64">
+                <DropdownMenuLabel>اختر دور الحساب</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {ROLES.map(r => {
+                  const RI = r.icon;
+                  const isCurrent = account.role === r.id;
+                  return (
+                    <DropdownMenuItem
+                      key={r.id}
+                      onSelect={() => onRoleChange(account.id, r.id)}
+                      className={isCurrent ? 'bg-[var(--bg-hover)]' : ''}
+                    >
+                      <RI className="w-3.5 h-3.5" style={{ color: r.swatch }} />
+                      <span className="text-[var(--text-primary)]">{r.label}</span>
+                      <span className="text-[var(--text-muted)] mr-auto text-xs">{r.description}</span>
+                      {isCurrent && <Check className="w-3.5 h-3.5" style={{ color: 'var(--success)' }} />}
+                    </DropdownMenuItem>
+                  );
+                })}
+              </DropdownMenuContent>
+            </DropdownMenu>
 
-          {/* إعادة تهيئة الجلسة */}
-          {!isConnected && (
-            <Button
-              variant="outline"
-              className="px-2 h-7 hover:bg-yellow-400/10 hover:text-yellow-400"
-              onClick={() => onReset(account.id)}
-              title="إعادة تهيئة QR"
-            >
-              <RotateCcw className="w-3 h-3" />
-            </Button>
-          )}
+            {/* ربط واتساب */}
+            {!isConnected && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className="px-2 h-7 hover:text-[var(--success)]"
+                    onClick={() => onConnect(account.id)}
+                    aria-label="ربط واتساب"
+                  >
+                    <Wifi className="w-3 h-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>ربط واتساب</TooltipContent>
+              </Tooltip>
+            )}
 
-          {/* اختبار الاتصال */}
-          <Button
-            variant="outline"
-            className="px-2 h-7 hover:bg-cyan-400/10 hover:text-cyan-400"
-            onClick={() => onTest(account.id)}
-            title="اختبار الاتصال"
-          >
-            <Activity className="w-3 h-3" />
-          </Button>
+            {/* إعادة تهيئة الجلسة */}
+            {!isConnected && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className="px-2 h-7 hover:text-[var(--warning)]"
+                    onClick={() => onReset(account.id)}
+                    aria-label="إعادة تهيئة رمز QR"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>إعادة تهيئة QR</TooltipContent>
+              </Tooltip>
+            )}
 
-          {/* السجلات */}
-          <Button
-            variant="outline"
-            className="px-2 h-7 hover:bg-purple-400/10 hover:text-purple-400"
-            onClick={() => onViewLogs(account.id, account.name)}
-            title="عرض السجلات"
-          >
-            <FileText className="w-3 h-3" />
-          </Button>
+            {/* اختبار الاتصال */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  className="px-2 h-7 hover:text-[var(--info)]"
+                  onClick={() => onTest(account.id)}
+                  aria-label="اختبار الاتصال"
+                >
+                  <Activity className="w-3 h-3" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>اختبار الاتصال</TooltipContent>
+            </Tooltip>
 
-          {/* حذف */}
-          <Button
-            variant="outline"
-            className="px-2 h-7 text-red-500 hover:bg-red-500/10 hover:text-red-500"
-            onClick={() => onDelete(account.id)}
-            title="حذف الحساب"
-          >
-            <Trash2 className="w-3 h-3" />
-          </Button>
-        </div>
+            {/* السجلات */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  className="px-2 h-7 hover:text-[#a855f7]"
+                  onClick={() => onViewLogs(account.id, account.name)}
+                  aria-label="عرض السجلات"
+                >
+                  <FileText className="w-3 h-3" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>عرض السجلات</TooltipContent>
+            </Tooltip>
+
+            {/* حذف */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  className="px-2 h-7 text-[var(--danger)] hover:bg-[var(--danger-bg)] hover:text-[var(--danger)]"
+                  onClick={() => onDelete(account.id)}
+                  aria-label="حذف الحساب"
+                >
+                  <Trash2 className="w-3 h-3" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>حذف الحساب</TooltipContent>
+            </Tooltip>
+          </div>
+        </TooltipProvider>
 
         {/* آخر نشاط */}
         {account.last_activity_at && (
@@ -370,16 +396,31 @@ function LogsModal({ accountId, accountName, onClose }: any) {
         </DialogHeader>
         <div className="max-h-80 overflow-y-auto space-y-1">
           {loading ? (
-            <div className="text-center text-[var(--text-muted)] py-8">جاري التحميل...</div>
+            <div className="flex flex-col gap-2 py-2">
+              {[1, 2, 3, 4].map(i => <Skeleton key={i} className="h-8 w-full rounded-lg" />)}
+            </div>
           ) : logs.length === 0 ? (
-            <div className="text-center text-[var(--text-muted)] py-8">لا توجد سجلات</div>
+            <EmptyState
+              icon={FileText}
+              title="لا توجد سجلات"
+              description="لم يتم تسجيل أي أحداث لهذا الحساب بعد."
+              className="py-8"
+            />
           ) : logs.map((log, i) => (
-            <div key={i} className={cn(
-              'flex items-start gap-2 px-3 py-2 rounded-lg text-xs',
-              log.level === 'error' ? 'bg-red-500/10 text-red-400' :
-              log.level === 'warn'  ? 'bg-yellow-500/10 text-yellow-400' :
-              'bg-[var(--bg-elevated)] text-[var(--text-secondary)]'
-            )}>
+            <div
+              key={i}
+              className="flex items-start gap-2 px-3 py-2 rounded-lg text-xs"
+              style={{
+                backgroundColor:
+                  log.level === 'error' ? 'var(--danger-bg)' :
+                  log.level === 'warn'  ? 'var(--warning-bg)' :
+                  'var(--bg-elevated)',
+                color:
+                  log.level === 'error' ? 'var(--danger)' :
+                  log.level === 'warn'  ? 'var(--warning)' :
+                  'var(--text-secondary)',
+              }}
+            >
               <span className="text-[var(--text-muted)] whitespace-nowrap">
                 {new Date(log.created_at).toLocaleTimeString('ar')}
               </span>
@@ -565,31 +606,65 @@ export default function AccountsView({
     setLogsModal({ id, name });
   };
 
+  const roleCount = (id: string) => accounts.filter(a => a.role === id).length;
+
   return (
     <div className="flex flex-col gap-5 animate-fade-in h-full">
 
-      {/* ── ملخص الأدوار ──────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-        <SummaryCard label="الكلي"    value={summary.total      || 0} icon={Smartphone}   color="text-[var(--text-primary)]" />
-        <SummaryCard label="متصل"     value={summary.connected  || 0} icon={Wifi}          color="text-green-400" />
-        <SummaryCard label="ناشرون"   value={summary.publishers || 0} icon={Megaphone}     color="text-blue-400" />
-        <SummaryCard label="باحثون"   value={summary.searchers  || 0} icon={Search}        color="text-purple-400" />
-        <SummaryCard label="منضمون"   value={summary.joiners    || 0} icon={Users}         color="text-yellow-400" />
-        <SummaryCard label="مراقبون"  value={summary.monitors   || 0} icon={Eye}           color="text-cyan-400" />
+      {/* ── ملخص الأدوار — StatCard الموحّد بدل بطاقات مكررة يدوياً ─────────── */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <StatCard
+          title="الكلي"
+          value={summary.total || 0}
+          icon={Smartphone}
+          color="var(--brand-primary)"
+        />
+        <StatCard
+          title="متصل"
+          value={summary.connected || 0}
+          icon={Wifi}
+          color="var(--success)"
+        />
+        <StatCard
+          title="ناشرون"
+          value={summary.publishers || 0}
+          icon={Megaphone}
+          color="#4f8ef7"
+        />
+        <StatCard
+          title="باحثون"
+          value={summary.searchers || 0}
+          icon={Search}
+          color="#a855f7"
+        />
+        <StatCard
+          title="منضمون"
+          value={summary.joiners || 0}
+          icon={Users}
+          color="var(--warning)"
+        />
+        <StatCard
+          title="مراقبون"
+          value={summary.monitors || 0}
+          icon={Eye}
+          color="#06b6d4"
+        />
       </div>
 
       {/* ── شريط الأدوات ─────────────────────────────────────────────────── */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
         <div>
-          <h1 className="text-xl font-bold text-[var(--text-primary)]">الحسابات</h1>
-          <p className="text-xs text-[var(--text-secondary)]">إدارة حسابات واتساب وأدوارها المستقلة</p>
+          <h1 className="text-heading-m font-bold text-[var(--text-primary)]">الحسابات</h1>
+          <p className="text-body-s text-[var(--text-secondary)]">إدارة حسابات واتساب وأدوارها المستقلة</p>
         </div>
         <div className="flex items-center gap-2 w-full sm:w-auto">
           <div className="relative flex-1 sm:w-52">
             <Search className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[var(--text-muted)]" />
             <input
+              id="account-search"
               className="input pr-8 text-sm h-9"
               placeholder="بحث عن حساب..."
+              aria-label="بحث عن حساب"
               value={search}
               onChange={e => setSearch(e.target.value)}
             />
@@ -602,28 +677,40 @@ export default function AccountsView({
       </div>
 
       {/* ── تبويبات الفلترة ──────────────────────────────────────────────── */}
-      <div className="flex gap-1.5 overflow-x-auto pb-1 flex-wrap">
-        {[{ id: 'all', label: 'الكل', icon: BarChart2 }, ...ROLES].map(r => {
-          const RI = (r as any).icon;
-          const roleInfo = ROLES.find(x => x.id === r.id);
+      <div className="flex gap-1.5 overflow-x-auto pb-1 flex-wrap" role="tablist" aria-label="تصفية الحسابات حسب الدور">
+        <button
+          role="tab"
+          aria-selected={filterRole === 'all'}
+          onClick={() => setFilterRole('all')}
+          className={cn(
+            'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all whitespace-nowrap',
+            filterRole === 'all'
+              ? 'bg-[var(--brand-primary)] text-[var(--text-on-brand)] border-[var(--brand-primary)]'
+              : 'bg-[var(--bg-surface)] text-[var(--text-secondary)] border-[var(--border-default)] hover:border-[var(--border-strong)]'
+          )}
+        >
+          <BarChart2 className="w-3 h-3" />
+          <span>الكل</span>
+        </button>
+        {ROLES.map(r => {
+          const RI = r.icon;
+          const isActive = filterRole === r.id;
           return (
             <button
               key={r.id}
+              role="tab"
+              aria-selected={isActive}
               onClick={() => setFilterRole(r.id)}
               className={cn(
                 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all whitespace-nowrap',
-                filterRole === r.id
-                  ? 'bg-[var(--brand-primary)] text-white border-[var(--brand-primary)]'
+                isActive
+                  ? 'bg-[var(--brand-primary)] text-[var(--text-on-brand)] border-[var(--brand-primary)]'
                   : 'bg-[var(--bg-surface)] text-[var(--text-secondary)] border-[var(--border-default)] hover:border-[var(--border-strong)]'
               )}
             >
               <RI className="w-3 h-3" />
               <span>{r.label}</span>
-              {r.id !== 'all' && (
-                <span className="opacity-60">
-                  ({accounts.filter(a => a.role === r.id).length})
-                </span>
-              )}
+              <span className="opacity-60">({roleCount(r.id)})</span>
             </button>
           );
         })}
@@ -632,29 +719,21 @@ export default function AccountsView({
       {/* ── قائمة الحسابات ──────────────────────────────────────────────── */}
       {loading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {[1,2,3].map(i => <Skeleton key={i} className="h-56 w-full rounded-xl" />)}
+          {[1, 2, 3].map(i => <Skeleton key={i} className="h-56 w-full rounded-xl" />)}
         </div>
       ) : filtered.length === 0 ? (
-        <div className="flex-1 flex flex-col items-center justify-center border-2 border-dashed border-[var(--border-default)] rounded-2xl p-12 text-center">
-          <div className="w-16 h-16 rounded-full bg-[var(--bg-elevated)] flex items-center justify-center text-[var(--text-muted)] mb-4">
-            <Smartphone className="w-8 h-8" />
-          </div>
-          <h3 className="text-lg font-bold text-[var(--text-primary)]">
-            {filterRole === 'all' ? 'لا توجد حسابات' : `لا توجد حسابات بدور "${getRoleInfo(filterRole).label}"`}
-          </h3>
-          <p className="text-[var(--text-secondary)] max-w-sm mt-2 mb-6 text-sm">
-            {filterRole === 'all'
+        <EmptyState
+          icon={Smartphone}
+          title={filterRole === 'all' ? 'لا توجد حسابات' : `لا توجد حسابات بدور "${getRoleInfo(filterRole).label}"`}
+          description={
+            filterRole === 'all'
               ? 'أضف حساباً جديداً لتبدأ في النشر والإدارة.'
               : 'قم بتعيين هذا الدور لحساب موجود أو أضف حساباً جديداً.'
-            }
-          </p>
-          {filterRole === 'all' && (
-            <Button onClick={() => setIsAddOpen(true)}>
-              <Plus className="w-4 h-4" />
-              إضافة حساب
-            </Button>
-          )}
-        </div>
+          }
+          actionLabel={filterRole === 'all' ? 'إضافة حساب' : undefined}
+          onAction={filterRole === 'all' ? () => setIsAddOpen(true) : undefined}
+          className="flex-1 border-2 border-dashed border-[var(--border-default)] rounded-2xl"
+        />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 overflow-y-auto pb-8">
           {filtered.map(account => (
@@ -685,8 +764,11 @@ export default function AccountsView({
           </DialogHeader>
           <div className="py-4 flex flex-col gap-4">
             <div className="flex flex-col gap-2">
-              <label className="text-sm font-medium">اسم الحساب</label>
+              <label htmlFor="new-account-name" className="text-sm font-medium text-[var(--text-primary)]">
+                اسم الحساب
+              </label>
               <input
+                id="new-account-name"
                 className="input"
                 placeholder="مثال: حساب النشر الأول"
                 value={newName}
