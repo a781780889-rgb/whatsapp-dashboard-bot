@@ -7,6 +7,11 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip';
 import { Switch } from '@/components/ui/switch';
 import {
+  DropdownMenu, DropdownMenuTrigger, DropdownMenuContent,
+  DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator,
+} from '@/components/ui/dropdown-menu';
+import { StatCard } from '@/components/ui/stat-card';
+import {
   Users, Search, Filter, Download, Send, Bot, Link2,
   BarChart3, Eye, Smartphone, ChevronDown, ChevronUp,
   MessageSquare, Calendar, Crown, Shield, UserCheck,
@@ -164,24 +169,6 @@ function timeAgo(iso: string | null): string {
 }
 
 /* ─────────────── Sub-components ─────────────── */
-function LegacyStatCard({ icon: Icon, label, value, color }: {
-  icon: any; label: string; value: string | number; color: string
-}) {
-  return (
-    <Card className="card">
-      <CardContent className="p-4">
-        <div className="flex items-center justify-between mb-3">
-          <p className="text-xs font-medium text-[var(--text-secondary)]">{label}</p>
-          <div className={cn('w-8 h-8 rounded-lg flex items-center justify-center', color + '/10')}>
-            <Icon className={cn('w-4 h-4', color)} />
-          </div>
-        </div>
-        <p className={cn('text-2xl font-bold', color)}>{value}</p>
-      </CardContent>
-    </Card>
-  );
-}
-
 function ActivityBar({ level }: { level: number }) {
   const color = level >= 70 ? 'var(--success)' : level >= 40 ? 'var(--warning)' : 'var(--danger)';
   return (
@@ -420,7 +407,6 @@ function TabMembers({ group, accountId }: { group: WaGroup; accountId: string })
   const [filter,  setFilter ] = useState<'all'|'admin'|'member'>('all');
   const [saving,  setSaving ] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string|null>(null);
-  const [showSaveMenu, setShowSaveMenu] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -454,7 +440,6 @@ function TabMembers({ group, accountId }: { group: WaGroup; accountId: string })
   const handleExport = async (format: ExportFormat) => {
     setSaving(true);
     setSaveMsg(null);
-    setShowSaveMenu(false);
     try {
       if (format === 'db') {
         // حفظ في قاعدة البيانات عبر endpoint
@@ -523,10 +508,7 @@ function TabMembers({ group, accountId }: { group: WaGroup; accountId: string })
     </div>
   );
   if (error) return (
-    <div className="flex items-center gap-2 p-4 rounded-xl bg-red-500/5 border border-red-500/15">
-      <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
-      <p className="text-sm text-red-400">{error}</p>
-    </div>
+    <EmptyState icon={AlertCircle} title={error} variant="error" className="py-6" />
   );
 
   return (
@@ -539,49 +521,47 @@ function TabMembers({ group, accountId }: { group: WaGroup; accountId: string })
         </div>
 
         {/* زر حفظ الأعضاء */}
-        <div className="relative">
-          <Button
-            size="sm"
-            onClick={() => setShowSaveMenu(!showSaveMenu)}
-            disabled={saving || members.length === 0}
-            className="gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white border-0"
-          >
-            {saving
-              ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-              : <Download className="w-3.5 h-3.5" />
-            }
-            حفظ جميع الأعضاء
-            <ChevronDown className={cn('w-3 h-3 transition-transform', showSaveMenu && 'rotate-180')} />
-          </Button>
-
-          {showSaveMenu && (
-            <div className="absolute top-full left-0 mt-1.5 w-52 bg-[var(--bg-card)] border border-[var(--border-default)] rounded-2xl shadow-2xl z-50 p-2" dir="rtl">
-              <p className="text-[10px] font-semibold text-[var(--text-muted)] px-2 pb-1.5 pt-0.5 uppercase tracking-wider">اختر صيغة الحفظ</p>
-              {[
-                { fmt: 'csv'   as ExportFormat, icon: FileText,        label: 'CSV',             desc: 'جدول بيانات عام'     },
-                { fmt: 'excel' as ExportFormat, icon: FileSpreadsheet, label: 'Excel',           desc: 'ملف إكسل مع ترميز عربي' },
-                { fmt: 'txt'   as ExportFormat, icon: FileText,        label: 'TXT',             desc: 'أرقام نصية فقط'      },
-                { fmt: 'db'    as ExportFormat, icon: DatabaseZap,     label: 'قاعدة البيانات', desc: 'حفظ في السيرفر'       },
-              ].map(opt => (
-                <button key={opt.fmt} onClick={() => handleExport(opt.fmt)}
-                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-[var(--bg-elevated)] transition-colors text-right">
-                  <opt.icon className="w-4 h-4 text-[var(--brand-primary)] shrink-0" />
-                  <div>
-                    <p className="text-sm font-bold text-[var(--text-primary)]">{opt.label}</p>
-                    <p className="text-[10px] text-[var(--text-muted)]">{opt.desc}</p>
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              size="sm"
+              disabled={saving || members.length === 0}
+              className="gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white border-0"
+            >
+              {saving
+                ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                : <Download className="w-3.5 h-3.5" />
+              }
+              حفظ جميع الأعضاء
+              <ChevronDown className="w-3 h-3" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56" dir="rtl">
+            <DropdownMenuLabel>اختر صيغة الحفظ</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            {[
+              { fmt: 'csv'   as ExportFormat, icon: FileText,        label: 'CSV',             desc: 'جدول بيانات عام'     },
+              { fmt: 'excel' as ExportFormat, icon: FileSpreadsheet, label: 'Excel',           desc: 'ملف إكسل مع ترميز عربي' },
+              { fmt: 'txt'   as ExportFormat, icon: FileText,        label: 'TXT',             desc: 'أرقام نصية فقط'      },
+              { fmt: 'db'    as ExportFormat, icon: DatabaseZap,     label: 'قاعدة البيانات', desc: 'حفظ في السيرفر'       },
+            ].map(opt => (
+              <DropdownMenuItem key={opt.fmt} onClick={() => handleExport(opt.fmt)} className="gap-3 py-2.5">
+                <opt.icon className="w-4 h-4 text-[var(--brand-primary)] shrink-0" />
+                <div>
+                  <p className="text-sm font-bold text-[var(--text-primary)]">{opt.label}</p>
+                  <p className="text-[10px] text-[var(--text-muted)]">{opt.desc}</p>
+                </div>
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {/* رسالة الحفظ */}
       {saveMsg && (
         <div className={cn(
-          'flex items-center gap-2 p-2.5 rounded-xl text-xs font-medium',
-          saveMsg.startsWith('✅') ? 'bg-green-500/10 border border-green-500/20 text-green-400' : 'bg-red-500/10 border border-red-500/20 text-red-400'
+          'flex items-center gap-2 p-2.5 rounded-xl text-xs font-medium border',
+          saveMsg.startsWith('✅') ? 'bg-[var(--success-bg)] border-[var(--success)]/20 text-[var(--success)]' : 'bg-[var(--danger-bg)] border-[var(--danger)]/20 text-[var(--danger)]'
         )}>
           {saveMsg}
           <button onClick={() => setSaveMsg(null)} className="mr-auto"><X className="w-3.5 h-3.5" /></button>
@@ -606,7 +586,7 @@ function TabMembers({ group, accountId }: { group: WaGroup; accountId: string })
       {/* قائمة الأعضاء */}
       <div className="flex flex-col gap-1 max-h-64 overflow-y-auto">
         {shown.length === 0
-          ? <p className="text-sm text-[var(--text-muted)] text-center py-4">لا توجد نتائج</p>
+          ? <EmptyState icon={Users} title="لا توجد نتائج" className="py-6" />
           : shown.map((m, i) => {
               const phone   = m.id.split('@')[0].replace(/:/g, '');
               const isAdmin = !!m.admin;
@@ -618,11 +598,22 @@ function TabMembers({ group, accountId }: { group: WaGroup; accountId: string })
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-xs font-mono text-[var(--text-primary)]">+{phone}</p>
-                    {isAdmin && <p className="text-[10px] text-[var(--brand-primary)]">{m.admin === 'superadmin' ? 'مشرف رئيسي' : 'مشرف'}</p>}
+                    {isAdmin && (
+                      <Badge variant="soft" size="sm" className="mt-0.5">
+                        {m.admin === 'superadmin' ? 'مشرف رئيسي' : 'مشرف'}
+                      </Badge>
+                    )}
                   </div>
-                  <button onClick={() => navigator.clipboard?.writeText('+' + phone)} className="p-1 rounded hover:bg-[var(--bg-overlay)]">
-                    <Copy className="w-3 h-3 text-[var(--text-muted)]" />
-                  </button>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button onClick={() => navigator.clipboard?.writeText('+' + phone)} className="p-1 rounded hover:bg-[var(--bg-overlay)]" aria-label="نسخ الرقم">
+                          <Copy className="w-3 h-3 text-[var(--text-muted)]" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent>نسخ الرقم</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                 </div>
               );
             })}
@@ -941,7 +932,7 @@ function ExclusionManagerModal({
       <DialogContent className="max-w-md flex flex-col max-h-[85vh]" dir="rtl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <UserMinus className="w-5 h-5 text-red-400" />
+            <UserMinus className="w-5 h-5 text-[var(--danger)]" />
             إدارة قائمة الاستثناءات
           </DialogTitle>
         </DialogHeader>
@@ -975,7 +966,7 @@ function ExclusionManagerModal({
 
         {msg && (
           <div className={cn('p-2.5 rounded-xl text-xs font-medium flex items-center gap-2',
-            msg.startsWith('✅') ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400')}>
+            msg.startsWith('✅') ? 'bg-[var(--success-bg)] text-[var(--success)]' : 'bg-[var(--danger-bg)] text-[var(--danger)]')}>
             {msg}
             <button onClick={() => setMsg(null)} className="mr-auto"><X className="w-3 h-3" /></button>
           </div>
@@ -987,7 +978,7 @@ function ExclusionManagerModal({
             الأرقام المستثناة ({exclusions.length})
           </p>
           {exclusions.length > 0 && (
-            <button onClick={handleClear} className="text-xs text-red-400 hover:text-red-300 flex items-center gap-1">
+            <button onClick={handleClear} className="text-xs text-[var(--danger)] hover:opacity-80 flex items-center gap-1">
               <Trash2 className="w-3 h-3" />مسح الكل
             </button>
           )}
@@ -997,10 +988,7 @@ function ExclusionManagerModal({
           {loading ? (
             [...Array(3)].map((_, i) => <div key={i} className="h-10 bg-[var(--bg-elevated)] rounded-xl animate-pulse" />)
           ) : exclusions.length === 0 ? (
-            <div className="text-center py-6 text-[var(--text-muted)]">
-              <UserX className="w-8 h-8 mx-auto mb-2 opacity-40" />
-              <p className="text-sm">لا توجد أرقام مستثناة</p>
-            </div>
+            <EmptyState icon={UserX} title="لا توجد أرقام مستثناة" className="py-6" />
           ) : (
             exclusions.map(ex => (
               <div key={ex.id} className="flex items-center gap-3 p-2.5 bg-[var(--bg-elevated)] rounded-xl">
@@ -1008,8 +996,8 @@ function ExclusionManagerModal({
                   <p className="text-xs font-mono text-[var(--text-primary)]">+{ex.phone}</p>
                   {ex.note && <p className="text-[10px] text-[var(--text-muted)] truncate">{ex.note}</p>}
                 </div>
-                <button onClick={() => handleDelete(ex.id)} className="p-1 rounded hover:bg-red-500/10">
-                  <X className="w-3.5 h-3.5 text-red-400" />
+                <button onClick={() => handleDelete(ex.id)} className="p-1 rounded hover:bg-[var(--danger-bg)]" aria-label="حذف الرقم">
+                  <X className="w-3.5 h-3.5 text-[var(--danger)]" />
                 </button>
               </div>
             ))
@@ -1166,9 +1154,9 @@ function MemberPublishModal({
                   <div className={cn(
                     'flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold transition-all',
                     step === s.n
-                      ? 'bg-[var(--brand-primary)] text-white'
+                      ? 'bg-[var(--brand-primary)] text-[var(--text-on-brand)]'
                       : step > s.n
-                        ? 'bg-green-500/20 text-green-400'
+                        ? 'bg-[var(--success-bg)] text-[var(--success)]'
                         : 'bg-[var(--bg-elevated)] text-[var(--text-muted)]'
                   )}>
                     {step > s.n ? <CheckCircle2 className="w-3 h-3" /> : <span>{s.n}</span>}
@@ -1220,13 +1208,9 @@ function MemberPublishModal({
                             <p className="text-sm font-medium text-[var(--text-primary)] truncate">{g.name}</p>
                             <p className="text-xs text-[var(--text-muted)]">{g.members_count.toLocaleString()} عضو</p>
                           </div>
-                          <span className={cn('text-[10px] font-bold px-1.5 py-0.5 rounded',
-                            g.publish_status === 'green'
-                              ? 'bg-green-500/10 text-green-400'
-                              : 'bg-yellow-500/10 text-yellow-400'
-                          )}>
+                          <Badge variant={g.publish_status === 'green' ? 'success' : 'warning'} size="sm">
                             {g.publish_status === 'green' ? '🟢' : '🟡'}
-                          </span>
+                          </Badge>
                         </label>
                       ))
                     )}
@@ -1288,7 +1272,7 @@ function MemberPublishModal({
                           onClick={() => setIntervalSec(sec)}
                           className={cn('px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors border',
                             intervalSec === sec
-                              ? 'bg-[var(--brand-primary)] text-white border-[var(--brand-primary)]'
+                              ? 'bg-[var(--brand-primary)] text-[var(--text-on-brand)] border-[var(--brand-primary)]'
                               : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)] border-[var(--border-default)]'
                           )}
                         >
@@ -1312,16 +1296,11 @@ function MemberPublishModal({
                       <p className="text-sm font-medium text-[var(--text-primary)]">استثناء المشرفين</p>
                       <p className="text-xs text-[var(--text-muted)]">تجاهل مشرفي المجموعة عند الإرسال</p>
                     </div>
-                    <button
-                      onClick={() => setExcludeAdmins(!excludeAdmins)}
-                      className={cn('w-11 h-6 rounded-full transition-all relative shrink-0',
-                        excludeAdmins ? 'bg-orange-500' : 'bg-[var(--bg-overlay)]'
-                      )}
-                    >
-                      <div className={cn('absolute top-1 w-4 h-4 bg-white rounded-full transition-all shadow-sm',
-                        excludeAdmins ? 'right-1' : 'left-1'
-                      )} />
-                    </button>
+                    <Switch
+                      checked={excludeAdmins}
+                      onCheckedChange={setExcludeAdmins}
+                      aria-label="استثناء المشرفين"
+                    />
                   </div>
 
                   {/* إدارة قائمة الاستثناءات */}
@@ -1339,9 +1318,9 @@ function MemberPublishModal({
                 </div>
 
                 {previewError && (
-                  <div className="flex items-center gap-2 p-3 rounded-xl bg-red-500/5 border border-red-500/20">
-                    <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
-                    <p className="text-sm text-red-400">{previewError}</p>
+                  <div className="flex items-center gap-2 p-3 rounded-xl bg-[var(--danger-bg)] border border-[var(--danger)]/20">
+                    <AlertCircle className="w-4 h-4 text-[var(--danger)] shrink-0" />
+                    <p className="text-sm text-[var(--danger)]">{previewError}</p>
                   </div>
                 )}
 
@@ -1365,8 +1344,8 @@ function MemberPublishModal({
                 <div className="grid grid-cols-3 gap-3">
                   {[
                     { label: 'إجمالي المستهدفين', value: previewTargets.length.toLocaleString(), color: 'text-[var(--brand-primary)]' },
-                    { label: 'وقت الإرسال التقديري', value: estimatedMinutes > 60 ? `${Math.floor(estimatedMinutes/60)}س ${estimatedMinutes%60}د` : `${estimatedMinutes} دقيقة`, color: 'text-blue-400' },
-                    { label: 'الفاصل الزمني', value: `${intervalSec} ثانية`, color: 'text-green-400' },
+                    { label: 'وقت الإرسال التقديري', value: estimatedMinutes > 60 ? `${Math.floor(estimatedMinutes/60)}س ${estimatedMinutes%60}د` : `${estimatedMinutes} دقيقة`, color: 'text-[var(--info)]' },
+                    { label: 'الفاصل الزمني', value: `${intervalSec} ثانية`, color: 'text-[var(--success)]' },
                   ].map((s, i) => (
                     <div key={i} className="bg-[var(--bg-elevated)] rounded-xl p-3 text-center border border-[var(--border-default)]">
                       <p className={cn('text-lg font-bold', s.color)}>{s.value}</p>
@@ -1377,10 +1356,10 @@ function MemberPublishModal({
 
                 {/* تحذير للأعداد الكبيرة */}
                 {previewTargets.length > 100 && (
-                  <div className="flex items-start gap-2 p-3 rounded-xl bg-yellow-500/5 border border-yellow-500/20">
-                    <AlertTriangle className="w-4 h-4 text-yellow-400 mt-0.5 shrink-0" />
+                  <div className="flex items-start gap-2 p-3 rounded-xl bg-[var(--warning-bg)] border border-[var(--warning)]/20">
+                    <AlertTriangle className="w-4 h-4 text-[var(--warning)] mt-0.5 shrink-0" />
                     <div>
-                      <p className="text-sm font-bold text-yellow-400">تنبيه: عدد كبير من المستهدفين</p>
+                      <p className="text-sm font-bold text-[var(--warning)]">تنبيه: عدد كبير من المستهدفين</p>
                       <p className="text-xs text-[var(--text-muted)] mt-0.5">
                         سيستغرق الإرسال حوالي {estimatedMinutes} دقيقة. تأكد أن الحساب سيبقى متصلاً طوال هذه المدة.
                       </p>
@@ -1398,9 +1377,7 @@ function MemberPublishModal({
                           <Phone className="w-3 h-3 text-[var(--text-muted)]" />
                         </div>
                         <span className="text-xs font-mono text-[var(--text-primary)]">+{t.phone}</span>
-                        {t.is_admin && (
-                          <span className="text-[9px] px-1 py-0.5 rounded bg-[var(--brand-primary)]/10 text-[var(--brand-primary)]">مشرف</span>
-                        )}
+                        {t.is_admin && <Badge variant="soft" size="sm">مشرف</Badge>}
                       </div>
                     ))}
                     {previewTargets.length > 50 && (
@@ -1447,19 +1424,19 @@ function MemberPublishModal({
                 <div className={cn(
                   'p-5 rounded-2xl text-center border-2',
                   result.success
-                    ? 'bg-green-500/5 border-green-500/20'
-                    : 'bg-red-500/5 border-red-500/20'
+                    ? 'bg-[var(--success-bg)] border-[var(--success)]/20'
+                    : 'bg-[var(--danger-bg)] border-[var(--danger)]/20'
                 )}>
                   <div className={cn(
                     'w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-3',
-                    result.success ? 'bg-green-500/10' : 'bg-red-500/10'
+                    result.success ? 'bg-[var(--success-bg)]' : 'bg-[var(--danger-bg)]'
                   )}>
                     {result.success
-                      ? <CheckCircle2 className="w-7 h-7 text-green-400" />
-                      : <AlertCircle  className="w-7 h-7 text-red-400" />
+                      ? <CheckCircle2 className="w-7 h-7 text-[var(--success)]" />
+                      : <AlertCircle  className="w-7 h-7 text-[var(--danger)]" />
                     }
                   </div>
-                  <p className={cn('text-lg font-bold', result.success ? 'text-green-400' : 'text-red-400')}>
+                  <p className={cn('text-lg font-bold', result.success ? 'text-[var(--success)]' : 'text-[var(--danger)]')}>
                     {result.success ? (result.scheduled ? 'تم جدولة الإرسال ✅' : 'تم الإرسال ✅') : 'فشل الإرسال ❌'}
                   </p>
                   <p className="text-sm text-[var(--text-secondary)] mt-2">{result.message || result.error}</p>
@@ -1468,8 +1445,8 @@ function MemberPublishModal({
                 {result.success && !result.scheduled && (
                   <div className="grid grid-cols-3 gap-3">
                     {[
-                      { label: 'المُرسَل',   value: result.sent   || 0, color: 'text-green-400' },
-                      { label: 'الفاشل',    value: result.failed || 0, color: 'text-red-400'   },
+                      { label: 'المُرسَل',   value: result.sent   || 0, color: 'text-[var(--success)]' },
+                      { label: 'الفاشل',    value: result.failed || 0, color: 'text-[var(--danger)]'   },
                       { label: 'الإجمالي',  value: result.total  || 0, color: 'text-[var(--brand-primary)]' },
                     ].map((s, i) => (
                       <div key={i} className="bg-[var(--bg-elevated)] rounded-xl p-3 text-center">
@@ -1554,9 +1531,9 @@ function CategoryRow({ group, onClick, onQuickPublish }: {
   onQuickPublish?: (g: WaGroup) => void;
 }) {
   const statusConfig = {
-    green:  { icon: CheckSquare, cls: 'text-green-400',  bg: 'bg-green-500/10'  },
-    yellow: { icon: MinusSquare, cls: 'text-yellow-400', bg: 'bg-yellow-500/10' },
-    red:    { icon: XSquare,     cls: 'text-red-400',    bg: 'bg-red-500/10'    },
+    green:  { icon: CheckSquare, cls: 'text-[var(--success)]', bg: 'bg-[var(--success-bg)]' },
+    yellow: { icon: MinusSquare, cls: 'text-[var(--warning)]', bg: 'bg-[var(--warning-bg)]' },
+    red:    { icon: XSquare,     cls: 'text-[var(--danger)]',  bg: 'bg-[var(--danger-bg)]'  },
   };
   const cfg = statusConfig[group.publish_status as keyof typeof statusConfig] || statusConfig.red;
   const StatusIcon = cfg.icon;
@@ -1573,18 +1550,14 @@ function CategoryRow({ group, onClick, onQuickPublish }: {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <p className="text-sm font-bold text-[var(--text-primary)] truncate">{group.name}</p>
-          {group.is_admin && (
-            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-[var(--brand-primary)]/10 text-[var(--brand-primary)] shrink-0">
-              👑
-            </span>
-          )}
+          {group.is_admin && <Badge variant="soft" size="sm" className="shrink-0">👑</Badge>}
         </div>
         <div className="flex items-center gap-3 mt-0.5">
           <span className="text-xs text-[var(--text-muted)] flex items-center gap-1">
             <Users className="w-3 h-3" />{group.members_count.toLocaleString()}
           </span>
           {group.announce && (
-            <span className="text-xs text-yellow-400">📢 إعلانات</span>
+            <span className="text-xs text-[var(--warning)]">📢 إعلانات</span>
           )}
           {!group.is_member && (
             <span className="text-xs text-[var(--text-muted)] flex items-center gap-1">
@@ -1595,13 +1568,20 @@ function CategoryRow({ group, onClick, onQuickPublish }: {
       </div>
       <div className="flex items-center gap-2 shrink-0">
         {canPublish && onQuickPublish && (
-          <button
-            onClick={(e) => { e.stopPropagation(); onQuickPublish(group); }}
-            className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-green-500/10 text-green-400 hover:bg-green-500/20 border border-green-500/20 transition-all opacity-0 group-hover:opacity-100"
-            title="نشر في هذه المجموعة"
-          >
-            <Send className="w-3 h-3" />نشر
-          </button>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={(e) => { e.stopPropagation(); onQuickPublish(group); }}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-[var(--success-bg)] text-[var(--success)] hover:bg-[var(--success-bg)] border border-[var(--success)]/20 transition-all opacity-0 group-hover:opacity-100"
+                  aria-label="نشر في هذه المجموعة"
+                >
+                  <Send className="w-3 h-3" />نشر
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>نشر في هذه المجموعة</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         )}
         <div className="text-right">
           <p className="text-xs text-[var(--text-muted)]">{group.activity_level}% نشاط</p>
@@ -1654,10 +1634,10 @@ function CategoriesPanel({
   useEffect(() => { fetchCategories(); }, [fetchCategories]);
 
   const TABS = [
-    { id: 'publishable'    as const, label: 'قابلة للنشر',     icon: CheckSquare, color: 'text-green-400',  count: cats?.publishable.count    || 0 },
-    { id: 'restricted'     as const, label: 'مقيدة',            icon: MinusSquare, color: 'text-yellow-400', count: cats?.restricted.count     || 0 },
-    { id: 'nonPublishable' as const, label: 'غير قابلة',        icon: XSquare,     color: 'text-red-400',    count: cats?.nonPublishable.count || 0 },
-    { id: 'archived'       as const, label: 'مؤرشفة',           icon: Archive,     color: 'text-gray-400',   count: cats?.archived.count       || 0 },
+    { id: 'publishable'    as const, label: 'قابلة للنشر',     icon: CheckSquare, color: 'text-[var(--success)]',    count: cats?.publishable.count    || 0 },
+    { id: 'restricted'     as const, label: 'مقيدة',            icon: MinusSquare, color: 'text-[var(--warning)]',    count: cats?.restricted.count     || 0 },
+    { id: 'nonPublishable' as const, label: 'غير قابلة',        icon: XSquare,     color: 'text-[var(--danger)]',     count: cats?.nonPublishable.count || 0 },
+    { id: 'archived'       as const, label: 'مؤرشفة',           icon: Archive,     color: 'text-[var(--text-muted)]', count: cats?.archived.count       || 0 },
   ];
 
   const currentGroups = useMemo(() => {
@@ -1679,10 +1659,10 @@ function CategoriesPanel({
       {stats && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {[
-            { label: 'قابلة للنشر',  value: stats.publishable,    color: 'text-green-400',  bg: 'bg-green-500/10'  },
-            { label: 'مقيدة',         value: stats.restricted,     color: 'text-yellow-400', bg: 'bg-yellow-500/10' },
-            { label: 'غير قابلة',     value: stats.nonPublishable, color: 'text-red-400',    bg: 'bg-red-500/10'    },
-            { label: 'مؤرشفة',        value: stats.archived,       color: 'text-gray-400',   bg: 'bg-gray-500/10'   },
+            { label: 'قابلة للنشر',  value: stats.publishable,    color: 'text-[var(--success)]',    bg: 'bg-[var(--success-bg)]' },
+            { label: 'مقيدة',         value: stats.restricted,     color: 'text-[var(--warning)]',    bg: 'bg-[var(--warning-bg)]' },
+            { label: 'غير قابلة',     value: stats.nonPublishable, color: 'text-[var(--danger)]',     bg: 'bg-[var(--danger-bg)]'  },
+            { label: 'مؤرشفة',        value: stats.archived,       color: 'text-[var(--text-muted)]', bg: 'bg-[var(--bg-elevated)]' },
           ].map((s, i) => (
             <div key={i} className={cn('rounded-xl p-3 text-center border border-[var(--border-default)]', s.bg)}>
               <p className={cn('text-xl font-bold', s.color)}>{s.value}</p>
@@ -1704,26 +1684,28 @@ function CategoriesPanel({
       </div>
 
       {error && (
-        <div className="flex items-center gap-2 p-3 rounded-xl bg-red-500/5 border border-red-500/20">
-          <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
-          <p className="text-sm text-red-400">{error}</p>
+        <div className="flex items-center gap-2 p-3 rounded-xl bg-[var(--danger-bg)] border border-[var(--danger)]/20">
+          <AlertCircle className="w-4 h-4 text-[var(--danger)] shrink-0" />
+          <p className="text-sm text-[var(--danger)]">{error}</p>
         </div>
       )}
 
       {/* تبويبات التصنيف */}
-      <div className="flex gap-1 flex-wrap">
+      <div className="flex gap-1 flex-wrap" role="tablist">
         {TABS.map(t => (
           <button
             key={t.id}
+            role="tab"
+            aria-selected={activeTab === t.id}
             onClick={() => setActiveTab(t.id)}
             className={cn(
               'flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium transition-colors',
               activeTab === t.id
-                ? 'bg-[var(--brand-primary)] text-white shadow-[var(--shadow-glow)]'
+                ? 'bg-[var(--brand-primary)] text-[var(--text-on-brand)] shadow-[var(--shadow-glow)]'
                 : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)] border border-[var(--border-default)]'
             )}
           >
-            <t.icon className={cn('w-3.5 h-3.5', activeTab === t.id ? 'text-white' : t.color)} />
+            <t.icon className={cn('w-3.5 h-3.5', activeTab === t.id ? 'text-[var(--text-on-brand)]' : t.color)} />
             {t.label}
             <span className={cn(
               'px-1.5 py-0.5 rounded text-[9px] font-bold',
@@ -1747,10 +1729,7 @@ function CategoriesPanel({
       {/* قائمة المجموعات */}
       <div className="flex flex-col divide-y divide-[var(--border-default)] bg-[var(--bg-card)] rounded-2xl border border-[var(--border-default)] overflow-hidden">
         {currentGroups.length === 0 ? (
-          <div className="p-8 text-center">
-            <Users className="w-10 h-10 text-[var(--text-muted)] mx-auto mb-3" />
-            <p className="text-sm text-[var(--text-muted)]">لا توجد مجموعات في هذه الفئة</p>
-          </div>
+          <EmptyState icon={Users} title="لا توجد مجموعات في هذه الفئة" />
         ) : (
           currentGroups.map(g => (
             <div key={g.group_jid} className="px-2">
@@ -2190,9 +2169,9 @@ function AllAccountsGroupsOverview({ onSwitchToDetail }: { onSwitchToDetail?: ()
       </div>
 
       {error && (
-        <div className="flex items-center gap-2 p-3 rounded-xl bg-yellow-500/5 border border-yellow-500/20">
-          <AlertCircle className="w-4 h-4 text-yellow-400 shrink-0" />
-          <p className="text-sm text-yellow-400">{error}</p>
+        <div className="flex items-center gap-2 p-3 rounded-xl bg-[var(--warning-bg)] border border-[var(--warning)]/20">
+          <AlertCircle className="w-4 h-4 text-[var(--warning)] shrink-0" />
+          <p className="text-sm text-[var(--warning)]">{error}</p>
         </div>
       )}
 
@@ -2214,23 +2193,23 @@ function AllAccountsGroupsOverview({ onSwitchToDetail }: { onSwitchToDetail?: ()
 
       {/* إحصائيات شاملة */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
-        <LegacyStatCard icon={Users}     label="إجمالي المجموعات"   value={summary?.total_groups ?? 0} color="text-[var(--brand-primary)]" />
+        <StatCard icon={Users} title="إجمالي المجموعات" value={summary?.total_groups ?? 0} color="var(--brand-primary)" />
         {/* [FIX] زر المجموعات المفتوحة — يُصفّر الفلتر ويعرض فقط القابلة للنشر */}
-        <div
+        <button
           onClick={() => setPublishFilter(publishFilter === 'green' ? 'all' : 'green')}
-          className="cursor-pointer"
-          title="اضغط لعرض المجموعات المفتوحة فقط"
+          className="text-right"
+          aria-label="اضغط لعرض المجموعات المفتوحة فقط"
         >
-          <LegacyStatCard
+          <StatCard
             icon={Unlock}
-            label={publishFilter === 'green' ? '✅ المجموعات المفتوحة' : 'المجموعات المفتوحة'}
+            title={publishFilter === 'green' ? '✅ المجموعات المفتوحة' : 'المجموعات المفتوحة'}
             value={summary?.publishable_count ?? publishStats.green}
-            color="text-green-400"
+            color="var(--success)"
           />
-        </div>
-        <LegacyStatCard icon={UserCheck} label="إجمالي الأعضاء"     value={(summary?.total_members ?? 0).toLocaleString()} color="text-blue-400" />
-        <LegacyStatCard icon={Wifi}      label="حسابات متصلة"       value={summary?.online_accounts ?? 0} color="text-green-400" />
-        <LegacyStatCard icon={WifiOff}   label="حسابات غير متصلة"   value={summary?.offline_accounts ?? 0} color="text-red-400" />
+        </button>
+        <StatCard icon={UserCheck} title="إجمالي الأعضاء"   value={(summary?.total_members ?? 0).toLocaleString()} color="var(--info)" />
+        <StatCard icon={Wifi}      title="حسابات متصلة"     value={summary?.online_accounts ?? 0} color="var(--success)" />
+        <StatCard icon={WifiOff}   title="حسابات غير متصلة" value={summary?.offline_accounts ?? 0} color="var(--danger)" />
       </div>
 
       {/* شرائح الحسابات المرتبطة */}
@@ -2244,9 +2223,9 @@ function AllAccountsGroupsOverview({ onSwitchToDetail }: { onSwitchToDetail?: ()
       <div className="flex gap-1 flex-wrap">
         {[
           { id: 'all',    label: 'جميع المجموعات',       count: publishStats.all,    activeColor: 'bg-[var(--brand-primary)]' },
-          { id: 'green',  label: '🟢 يستطيع النشر',       count: publishStats.green,  activeColor: 'bg-green-600' },
-          { id: 'yellow', label: '🟡 مقيد (مشرف فقط)',    count: publishStats.yellow, activeColor: 'bg-yellow-600' },
-          { id: 'red',    label: '🔴 لا يستطيع النشر',    count: publishStats.red,    activeColor: 'bg-red-600' },
+          { id: 'green',  label: '🟢 يستطيع النشر',       count: publishStats.green,  activeColor: 'bg-[var(--success)]' },
+          { id: 'yellow', label: '🟡 مقيد (مشرف فقط)',    count: publishStats.yellow, activeColor: 'bg-[var(--warning)]' },
+          { id: 'red',    label: '🔴 لا يستطيع النشر',    count: publishStats.red,    activeColor: 'bg-[var(--danger)]' },
         ].map(f => (
           <button
             key={f.id}
@@ -2254,7 +2233,7 @@ function AllAccountsGroupsOverview({ onSwitchToDetail }: { onSwitchToDetail?: ()
             className={cn(
               'flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium transition-colors',
               publishFilter === f.id
-                ? `${f.activeColor} text-white shadow-[var(--shadow-glow)]`
+                ? `${f.activeColor} text-[var(--text-on-brand)] shadow-[var(--shadow-glow)]`
                 : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)] border border-[var(--border-default)]'
             )}
           >
