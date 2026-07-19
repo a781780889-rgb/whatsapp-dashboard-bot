@@ -1,15 +1,16 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Search, Plus, Smartphone, Trash2,
   RotateCcw, Play, Square, RefreshCw, ChevronDown, Activity,
   Megaphone, Users, Eye, Ban, Settings, FileText, Wifi,
-  BarChart2, Clock, Check,
+  BarChart2, Clock, Check, X, AlertTriangle, Play as PlayIcon, Square as StopIcon,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { StatCard } from '@/components/ui/stat-card';
 import { EmptyState } from '@/components/ui/empty-state';
 import {
@@ -83,6 +84,8 @@ function AccountCard({
   onRoleChange,
   onTest,
   onViewLogs,
+  bulkChecked,
+  onBulkToggle,
 }: any) {
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
   const role = getRoleInfo(account.role);
@@ -107,6 +110,12 @@ function AccountCard({
         {/* رأس البطاقة */}
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-2.5">
+            <Checkbox
+              checked={bulkChecked}
+              onCheckedChange={() => onBulkToggle(account.id)}
+              aria-label={`تحديد ${account.name} للإجراء الجماعي`}
+              className="mt-1 shrink-0"
+            />
             <div className="relative">
               <div className="w-10 h-10 rounded-full bg-[var(--bg-elevated)] flex items-center justify-center border border-[var(--border-strong)]">
                 <Smartphone className="w-5 h-5 text-[var(--text-primary)]" />
@@ -453,6 +462,10 @@ export default function AccountsView({
   const [logsModal, setLogsModal]     = useState<{ id: string; name: string } | null>(null);
   // ── نافذة طرق الربط ────────────────────────────────────────────────────────
   const [connectModal, setConnectModal] = useState<{ id: string; name: string } | null>(null);
+  // ── التحديد الجماعي (Bulk Actions) ────────────────────────────────────────
+  const [bulkIds, setBulkIds]         = useState<Set<string>>(new Set());
+  const [deleteTarget, setDeleteTarget] = useState<{ ids: string[]; names: string[] } | null>(null);
+  const [bulkBusy, setBulkBusy]       = useState<string | null>(null);
   const { addToast } = useToast();
 
   // جلب الملخص
@@ -471,12 +484,26 @@ export default function AccountsView({
   }, [fetchSummary]);
 
   // تصفية الحسابات
-  const filtered = accounts.filter(a => {
+  const filtered = useMemo(() => accounts.filter(a => {
     const matchSearch = a.name.toLowerCase().includes(search.toLowerCase())
       || (a.phone_number || '').includes(search);
     const matchRole = filterRole === 'all' || a.role === filterRole;
     return matchSearch && matchRole;
-  });
+  }), [accounts, search, filterRole]);
+
+  // إفراغ التحديد الجماعي عند تغيير الفلترة/البحث كي لا يبقى تحديد لعناصر مخفية
+  useEffect(() => { clearBulk(); }, [search, filterRole]);
+
+  const filteredIds = useMemo(() => filtered.map(a => a.id), [filtered]);
+  const allFilteredSelected = filteredIds.length > 0 && filteredIds.every(id => bulkIds.has(id));
+  const someFilteredSelected = filteredIds.some(id => bulkIds.has(id));
+
+  const toggleSelectAllFiltered = () => {
+    setBulkIds(prev => {
+      if (allFilteredSelected) return new Set();
+      return new Set(filteredIds);
+    });
+  };
 
   // ── إضافة حساب ────────────────────────────────────────────────────────────
   const handleAdd = async () => {
@@ -522,17 +549,66 @@ export default function AccountsView({
     }
   };
 
-  // ── حذف الحساب ────────────────────────────────────────────────────────────
-  const handleDelete = async (id: string) => {
-    if (!confirm('هل أنت متأكد من حذف هذا الحساب؟ لا يمكن التراجع.')) return;
+  // ── حذف الحساب (فردي) — يفتح نافذة تأكيد بدل window.confirm ────────────────
+  const handleDelete = (id: string) => {
+    const account = accounts.find(a => a.id === id);
+    setDeleteTarget({ ids: [id], names: [account?.name || id] });
+  };
+
+  // ── تنفيذ الحذف الفعلي بعد التأكيد (فردي أو جماعي) ──────────────────────────
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    const { ids } = deleteTarget;
     try {
-      await authFetch(`${API}/accounts/${id}`, { method: 'DELETE' });
-      addToast({ title: 'تم الحذف', type: 'success' });
+      await Promise.all(ids.map(id => authFetch(`${API}/accounts/${id}`, { method: 'DELETE' })));
+      addToast({
+        title: ids.length > 1 ? `تم حذف ${ids.length} حسابات` : 'تم الحذف',
+        type: 'success',
+      });
       fetchAccounts();
       fetchSummary();
-      if (selectedAccountId === id) setSelectedAccountId(null);
+      if (selectedAccountId && ids.includes(selectedAccountId)) setSelectedAccountId(null);
+      setBulkIds(prev => {
+        const next = new Set(prev);
+        ids.forEach(id => next.delete(id));
+        return next;
+      });
     } catch {
-      addToast({ title: 'خطأ', description: 'فشل الحذف', type: 'error' });
+      addToast({ title: 'خطأ', description: 'فشل حذف بعض الحسابات', type: 'error' });
+    } finally {
+      setDeleteTarget(null);
+    }
+  };
+
+  // ── تبديل تحديد حساب واحد في القائمة الجماعية ───────────────────────────────
+  const toggleBulk = (id: string) => {
+    setBulkIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const clearBulk = () => setBulkIds(new Set());
+
+  // ── تشغيل/إيقاف جماعي ────────────────────────────────────────────────────
+  const bulkSetRunning = async (start: boolean) => {
+    const ids = Array.from(bulkIds);
+    if (ids.length === 0) return;
+    setBulkBusy(start ? 'start' : 'stop');
+    try {
+      const results = await Promise.allSettled(
+        ids.map(id => authFetch(`${API}/accounts/${id}/${start ? 'start' : 'stop'}`, { method: 'POST' }))
+      );
+      const failed = results.filter(r => r.status === 'rejected').length;
+      addToast({
+        title: start ? 'تم تشغيل الحسابات المحددة' : 'تم إيقاف الحسابات المحددة',
+        description: failed > 0 ? `فشل ${failed} من ${ids.length}` : undefined,
+        type: failed > 0 ? 'error' : 'success',
+      });
+      fetchAccounts();
+    } finally {
+      setBulkBusy(null);
     }
   };
 
@@ -658,6 +734,23 @@ export default function AccountsView({
           <p className="text-body-s text-[var(--text-secondary)]">إدارة حسابات واتساب وأدوارها المستقلة</p>
         </div>
         <div className="flex items-center gap-2 w-full sm:w-auto">
+          {filtered.length > 0 && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={toggleSelectAllFiltered}
+                  className="hidden sm:flex items-center justify-center w-9 h-9 rounded-lg border border-[var(--border-default)] hover:border-[var(--border-strong)] transition-colors shrink-0"
+                  aria-label="تحديد كل الحسابات الظاهرة"
+                >
+                  <Checkbox
+                    checked={allFilteredSelected ? true : someFilteredSelected ? 'indeterminate' : false}
+                    onCheckedChange={toggleSelectAllFiltered}
+                  />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>تحديد الكل</TooltipContent>
+            </Tooltip>
+          )}
           <div className="relative flex-1 sm:w-52">
             <Search className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[var(--text-muted)]" />
             <input
@@ -675,6 +768,53 @@ export default function AccountsView({
           </Button>
         </div>
       </div>
+
+      {/* ── شريط الإجراءات الجماعية (Bulk Actions) ──────────────────────── */}
+      {bulkIds.size > 0 && (
+        <div className="flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl bg-[var(--brand-primary-light)] border border-[var(--brand-primary)]/25 animate-slide-up">
+          <div className="flex items-center gap-2 text-sm font-medium text-[var(--brand-primary)]">
+            <Check className="w-4 h-4" />
+            <span>تم تحديد {bulkIds.size} حساب</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => bulkSetRunning(true)}
+              disabled={bulkBusy !== null}
+            >
+              {bulkBusy === 'start' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <PlayIcon className="w-3.5 h-3.5" />}
+              <span>تشغيل</span>
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => bulkSetRunning(false)}
+              disabled={bulkBusy !== null}
+            >
+              {bulkBusy === 'stop' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <StopIcon className="w-3.5 h-3.5" />}
+              <span>إيقاف</span>
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="text-[var(--danger)] hover:bg-[var(--danger-bg)]"
+              onClick={() => {
+                const ids = Array.from(bulkIds);
+                const names = accounts.filter(a => ids.includes(a.id)).map(a => a.name);
+                setDeleteTarget({ ids, names });
+              }}
+              disabled={bulkBusy !== null}
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>حذف</span>
+            </Button>
+            <Button size="sm" variant="ghost" onClick={clearBulk} aria-label="إلغاء التحديد">
+              <X className="w-3.5 h-3.5" />
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* ── تبويبات الفلترة ──────────────────────────────────────────────── */}
       <div className="flex gap-1.5 overflow-x-auto pb-1 flex-wrap" role="tablist" aria-label="تصفية الحسابات حسب الدور">
@@ -751,6 +891,8 @@ export default function AccountsView({
               onRoleChange={handleRoleChange}
               onTest={handleTest}
               onViewLogs={handleViewLogs}
+              bulkChecked={bulkIds.has(account.id)}
+              onBulkToggle={toggleBulk}
             />
           ))}
         </div>
@@ -817,6 +959,43 @@ export default function AccountsView({
           onClose={() => setLogsModal(null)}
         />
       )}
+
+      {/* ── نافذة تأكيد الحذف (فردي أو جماعي) ────────────────────────────── */}
+      <Dialog open={!!deleteTarget} onOpenChange={(v) => !v && setDeleteTarget(null)}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-[var(--danger)]">
+              <AlertTriangle className="w-5 h-5" />
+              {deleteTarget && deleteTarget.ids.length > 1
+                ? `حذف ${deleteTarget.ids.length} حسابات`
+                : 'حذف الحساب'}
+            </DialogTitle>
+            <DialogDescription>
+              هذا الإجراء لا يمكن التراجع عنه. سيتم حذف جميع البيانات المرتبطة نهائياً.
+            </DialogDescription>
+          </DialogHeader>
+          {deleteTarget && (
+            <div className="max-h-40 overflow-y-auto flex flex-col gap-1.5 py-1">
+              {deleteTarget.names.map((n, i) => (
+                <div key={i} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[var(--bg-elevated)] text-sm text-[var(--text-primary)]">
+                  <Smartphone className="w-3.5 h-3.5 text-[var(--text-muted)] shrink-0" />
+                  <span className="truncate">{n}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>إلغاء</Button>
+            <Button
+              className="bg-[var(--danger)] hover:bg-[var(--danger)]/90 text-white"
+              onClick={confirmDelete}
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>{deleteTarget && deleteTarget.ids.length > 1 ? 'حذف الكل' : 'حذف'}</span>
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
