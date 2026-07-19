@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
 import { CommandPalette, type CommandItem } from '@/components/ui/command-palette';
+import { usePageMotion } from '@/hooks/usePageMotion';
 import {
   LayoutDashboard, Users, Library, Calendar, Megaphone,
   Link as LinkIcon, GitMerge, SearchCheck, Brain, Activity,
@@ -26,6 +27,7 @@ export function AppLayout({
   onLogout
 }: AppLayoutProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const motionRef = usePageMotion<HTMLDivElement>();
 
   const isAdmin = ['super_admin', 'admin'].includes(currentUser?.role);
 
@@ -77,7 +79,7 @@ export function AppLayout({
           onLogout={onLogout}
         />
         <main id="main-content" className="flex-1 overflow-auto p-6 scroll-smooth">
-          <div className="max-w-7xl mx-auto w-full h-full">
+          <div ref={motionRef} className="max-w-7xl mx-auto w-full h-full">
             {children}
           </div>
         </main>
