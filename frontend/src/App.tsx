@@ -1,32 +1,52 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ToastProvider } from './components/ui/ToastProvider';
 import LoginPage from './components/LoginPage';
 import { AppLayout } from './components/layout/AppLayout';
+import { SkeletonCard } from './components/ui/skeleton';
 
 // Views
-import DashboardHome        from './views/DashboardHome';
-import AccountsView         from './views/AccountsView';
-import CampaignsView        from './views/CampaignsView';
-import GroupsView           from './views/GroupsView';
-import LinkDashboardView    from './views/LinkDashboardView';
-import LinkJoinView         from './views/LinkJoinView';
-import ScheduleDashboardView from './views/ScheduleDashboardView';
-import AdLibraryView        from './views/AdLibraryView';
-import AIAutomationView    from './views/AIAutomationView';
-import KeywordMonitoringView from './views/KeywordMonitoringView';
+// DashboardHome loads eagerly — it's the first screen shown after login,
+// so lazy-loading it would only add a network waterfall with no benefit.
+import DashboardHome from './views/DashboardHome';
+
+// All other views are code-split (Performance Pass — Stage 5): each route's
+// JS is fetched only when the user navigates to it, shrinking the initial
+// bundle instead of shipping all 14 admin/feature screens up front.
+const AccountsView              = lazy(() => import('./views/AccountsView'));
+const CampaignsView             = lazy(() => import('./views/CampaignsView'));
+const GroupsView                = lazy(() => import('./views/GroupsView'));
+const LinkDashboardView         = lazy(() => import('./views/LinkDashboardView'));
+const LinkJoinView              = lazy(() => import('./views/LinkJoinView'));
+const ScheduleDashboardView     = lazy(() => import('./views/ScheduleDashboardView'));
+const AdLibraryView             = lazy(() => import('./views/AdLibraryView'));
+const AIAutomationView          = lazy(() => import('./views/AIAutomationView'));
+const KeywordMonitoringView     = lazy(() => import('./views/KeywordMonitoringView'));
 // Admin views
-import DiagnosticsDashboardView from './views/DiagnosticsDashboardView';
-import TelegramView         from './views/TelegramView';
-import AdminStatsView       from './views/AdminStatsView';
-import SubscriptionsView    from './views/SubscriptionsView';
-import SubscriberMonitoringView from './views/SubscriberMonitoringView';
+const DiagnosticsDashboardView  = lazy(() => import('./views/DiagnosticsDashboardView'));
+const TelegramView              = lazy(() => import('./views/TelegramView'));
+const AdminStatsView            = lazy(() => import('./views/AdminStatsView'));
+const SubscriptionsView         = lazy(() => import('./views/SubscriptionsView'));
+const SubscriberMonitoringView  = lazy(() => import('./views/SubscriberMonitoringView'));
 
 import { ErrorBoundary } from './components/ErrorBoundary';
 import {
   API, TOKEN_KEY, REFRESH_TOKEN_KEY, USER_KEY,
   saveTokens, clearTokens, authFetch,
 } from './utils/api';
+
+/** Route-level fallback while a lazy view's chunk downloads. Uses the
+ *  existing Skeleton system (motion.csv preset #15) so it feels native
+ *  to the rest of the loading-state language instead of a bare spinner. */
+function RouteLoadingFallback() {
+  return (
+    <div role="status" aria-live="polite" aria-busy="true" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <span className="sr-only">جاري التحميل…</span>
+      {Array.from({ length: 4 }).map((_, i) => <SkeletonCard key={i} />)}
+    </div>
+  );
+}
+
 
 
 function ProtectedRoute({ children, adminOnly = false, currentUser }:
@@ -182,6 +202,7 @@ function AppInner() {
       onAccountChange={handleAccountChange}
     >
       <ErrorBoundary>
+        <Suspense fallback={<RouteLoadingFallback />}>
         <Routes>
           {/* FIX 3: accounts prop passed to DashboardHome */}
           <Route path="/"               element={<DashboardHome accounts={accounts} />} />
@@ -222,6 +243,7 @@ function AppInner() {
 
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        </Suspense>
       </ErrorBoundary>
     </AppLayout>
   );
