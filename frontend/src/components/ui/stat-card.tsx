@@ -30,7 +30,7 @@ export function StatCard({
     "text-[var(--text-muted)]"
 
   return (
-    <Card className={cn("hover:translate-y-[-2px] transition-transform", className)}>
+    <Card hoverMotion className={className}>
       <CardContent className="p-5 flex flex-col gap-4">
         <div className="flex justify-between items-start">
           <div

@@ -1,22 +1,38 @@
 import * as React from "react"
 
 import { cn } from "@/lib/utils"
+import { attachCardHover } from "@/lib/motion"
 
 const Card = React.forwardRef<
   HTMLDivElement,
-  React.HTMLAttributes<HTMLDivElement> & { variant?: "default" | "glass" | "glow" }
->(({ className, variant = "default", ...props }, ref) => (
-  <div
-    ref={ref}
-    className={cn(
-      "rounded-xl border bg-card text-card-foreground shadow card",
-      variant === "glass" && "card-glass",
-      variant === "glow" && "card-glow",
-      className
-    )}
-    {...props}
-  />
-))
+  React.HTMLAttributes<HTMLDivElement> & {
+    variant?: "default" | "glass" | "glow"
+    /** Opt-in GSAP hover lift (motion.csv preset #2). Off by default so
+     *  existing dense tables/lists of cards aren't affected unintentionally. */
+    hoverMotion?: boolean
+  }
+>(({ className, variant = "default", hoverMotion = false, ...props }, ref) => {
+  const innerRef = React.useRef<HTMLDivElement>(null)
+  React.useImperativeHandle(ref, () => innerRef.current as HTMLDivElement)
+
+  React.useEffect(() => {
+    if (!hoverMotion || !innerRef.current) return
+    return attachCardHover(innerRef.current)
+  }, [hoverMotion])
+
+  return (
+    <div
+      ref={innerRef}
+      className={cn(
+        "rounded-xl border bg-card text-card-foreground shadow card",
+        variant === "glass" && "card-glass",
+        variant === "glow" && "card-glow",
+        className
+      )}
+      {...props}
+    />
+  )
+})
 Card.displayName = "Card"
 
 const CardHeader = React.forwardRef<
