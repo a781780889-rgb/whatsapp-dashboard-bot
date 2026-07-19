@@ -481,7 +481,7 @@ function TabMembers({ group, accountId }: { group: WaGroup; accountId: string })
 
       // CSV / TXT — تحميل مباشر من السيرفر
       const exportUrl = `${API}/accounts/${accountId}/groups/${encodeURIComponent(group.group_jid)}/members/export?format=${format}`;
-      const token     = localStorage.getItem('auth_token') || '';
+      const token     = localStorage.getItem('wa_token') || '';
       const res       = await fetch(exportUrl, { headers: { Authorization: `Bearer ${token}` } });
 
       if (!res.ok) { setSaveMsg('❌ فشل التصدير'); return; }
@@ -673,16 +673,8 @@ function TabStats({ group }: { group: WaGroup }) {
   );
 }
 
-function TabSend({ group }: { group: WaGroup }) {
-  const [msgType, setMsgType] = useState('text');
+function TabSend({ group, onOpenPublish }: { group: WaGroup; onOpenPublish: () => void }) {
   const canSend = group.can_send_text;
-  const types = [
-    { id: 'text',     icon: MessageSquare, label: 'نص',    allowed: group.can_send_text   },
-    { id: 'image',    icon: Image,         label: 'صورة',  allowed: group.can_send_images },
-    { id: 'video',    icon: Video,         label: 'فيديو', allowed: group.can_send_video  },
-    { id: 'file',     icon: FileText,      label: 'ملف',   allowed: group.can_send_files  },
-    { id: 'schedule', icon: Calendar,      label: 'مجدول', allowed: canSend              },
-  ];
   if (!canSend) return (
     <EmptyState
       icon={Lock}
@@ -693,29 +685,22 @@ function TabSend({ group }: { group: WaGroup }) {
     />
   );
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex gap-1 flex-wrap">
-        {types.map(t => (
-          <button key={t.id} onClick={() => t.allowed && setMsgType(t.id)} disabled={!t.allowed}
-            className={cn('flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
-              !t.allowed ? 'opacity-30 cursor-not-allowed bg-[var(--bg-elevated)] text-[var(--text-muted)]' :
-              msgType===t.id ? 'bg-[var(--brand-primary)] text-[var(--text-on-brand)]' :
-                               'bg-[var(--bg-elevated)] text-[var(--text-secondary)]')}>
-            <t.icon className="w-3 h-3" />{t.label}
-          </button>
-        ))}
-      </div>
-      {(msgType === 'text' || msgType === 'schedule') && (
-        <textarea className="input w-full min-h-28 resize-none" placeholder="اكتب رسالتك هنا..." />
-      )}
-      {msgType === 'image' && (
-        <div className="border-2 border-dashed border-[var(--border-strong)] rounded-xl p-8 text-center">
-          <Image className="w-8 h-8 text-[var(--text-muted)] mx-auto mb-2" />
-          <p className="text-sm text-[var(--text-secondary)]">اسحب صورة أو <span className="text-[var(--brand-primary)] cursor-pointer">اختر ملف</span></p>
+    <div className="flex flex-col gap-4">
+      <div className="p-4 rounded-2xl bg-[var(--brand-primary-light)] border border-[var(--brand-primary)]/20">
+        <div className="flex items-center gap-3 mb-1.5">
+          <div className="w-9 h-9 rounded-xl bg-[var(--brand-primary)] flex items-center justify-center text-[var(--text-on-brand)] shrink-0">
+            <SendHorizonal className="w-4.5 h-4.5" />
+          </div>
+          <p className="font-bold text-sm text-[var(--text-primary)]">النشر إلى هذه المجموعة</p>
         </div>
-      )}
-      {msgType === 'schedule' && <input type="datetime-local" className="input" />}
-      <Button className="w-full gap-2"><Send className="w-4 h-4" />إرسال للمجموعة</Button>
+        <p className="text-xs text-[var(--text-muted)]">
+          يفتح معالج النشر الكامل: اختيار نص أو إعلان من المكتبة، تحديد وقت الإرسال، ومعاينة المستهدفين قبل التأكيد.
+        </p>
+      </div>
+      <Button onClick={onOpenPublish} className="w-full gap-2">
+        <Send className="w-4 h-4" />
+        فتح معالج النشر
+      </Button>
     </div>
   );
 }
@@ -1476,8 +1461,8 @@ function MemberPublishModal({
 }
 
 /* ─────────────── Group Detail Modal ─────────────── */
-function GroupModal({ group, accountId, onClose }: {
-  group: WaGroup; accountId: string; onClose: () => void
+function GroupModal({ group, accountId, onClose, onOpenPublish }: {
+  group: WaGroup; accountId: string; onClose: () => void; onOpenPublish?: (g: WaGroup) => void;
 }) {
   const [tab, setTab] = useState('info');
   const content: Record<string, React.ReactNode> = {
@@ -1485,7 +1470,7 @@ function GroupModal({ group, accountId, onClose }: {
     publish: <TabPublish group={group} />,
     members: <TabMembers group={group} accountId={accountId} />,
     stats:   <TabStats   group={group} />,
-    send:    <TabSend    group={group} />,
+    send:    <TabSend    group={group} onOpenPublish={() => onOpenPublish?.(group)} />,
     auto:    <TabAuto    group={group} />,
   };
   return (
@@ -2329,6 +2314,11 @@ function AllAccountsGroupsOverview({ onSwitchToDetail }: { onSwitchToDetail?: ()
           group={liveSelectedGroup}
           accountId={liveSelectedGroup.account.id}
           onClose={() => setLiveSelectedGroup(null)}
+          onOpenPublish={(g) => {
+            setLiveSelectedGroup(null);
+            setQuickPublishGroup(g as LiveGroup);
+            setShowMemberPublish(true);
+          }}
         />
       )}
 
@@ -2408,6 +2398,11 @@ function SingleAccountGroupsView({
           group={selectedGroup}
           accountId={accountId}
           onClose={() => setSelectedGroup(null)}
+          onOpenPublish={(g) => {
+            setSelectedGroup(null);
+            setQuickPublishGroup(g);
+            setShowMemberPublish(true);
+          }}
         />
       )}
 
