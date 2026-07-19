@@ -757,6 +757,7 @@ function GroupAvatar({ group, size = 'md' }: { group: WaGroup; size?: 'sm' | 'md
   if (group.avatar_url && !imgError) {
     return (
       <img src={group.avatar_url} alt={group.name} onError={() => setImgError(true)}
+        loading="lazy" decoding="async"
         className={cn('rounded-2xl object-cover shrink-0', sizeMap[size])} />
     );
   }
