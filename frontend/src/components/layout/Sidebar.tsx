@@ -147,6 +147,7 @@ export function Sidebar({ isCollapsed, setIsCollapsed, currentUser, onLogout }: 
                     to={item.to}
                     end={(item as any).exact}
                     title={isCollapsed ? item.label : undefined}
+                    aria-label={isCollapsed ? item.label : undefined}
                     className={({ isActive }) => cn(
                       "flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-150 text-sm font-medium group relative",
                       isActive
@@ -154,8 +155,13 @@ export function Sidebar({ isCollapsed, setIsCollapsed, currentUser, onLogout }: 
                         : "text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
                     )}
                   >
-                    <item.icon className="w-5 h-5 shrink-0" />
-                    {!isCollapsed && <span className="truncate">{item.label}</span>}
+                    {({ isActive }) => (
+                      <>
+                        <item.icon className="w-5 h-5 shrink-0" aria-hidden="true" />
+                        {!isCollapsed && <span className="truncate">{item.label}</span>}
+                        {isActive && <span className="sr-only">(الصفحة الحالية)</span>}
+                      </>
+                    )}
                   </NavLink>
                 </li>
               ))}
@@ -176,13 +182,13 @@ export function Sidebar({ isCollapsed, setIsCollapsed, currentUser, onLogout }: 
               <p className="text-sm font-semibold truncate text-primary">{currentUser?.username}</p>
               <p className="text-xs font-medium" style={{ color: roleColor }}>{roleLabel}</p>
             </div>
-            <button onClick={onLogout} title="تسجيل الخروج"
+            <button onClick={onLogout} title="تسجيل الخروج" aria-label="تسجيل الخروج"
               className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--danger)] hover:bg-[var(--danger-bg)] transition-colors">
               <LogOut className="w-4 h-4" />
             </button>
           </div>
         ) : (
-          <button onClick={onLogout} title="تسجيل الخروج"
+          <button onClick={onLogout} title="تسجيل الخروج" aria-label="تسجيل الخروج"
             className="w-full flex justify-center p-2 text-[var(--text-muted)] hover:text-[var(--danger)] hover:bg-[var(--danger-bg)] rounded-xl transition-colors">
             <LogOut className="w-5 h-5" />
           </button>

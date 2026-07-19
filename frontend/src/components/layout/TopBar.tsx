@@ -147,8 +147,9 @@ export function TopBar({ accounts, selectedAccountId, onAccountChange, currentUs
           onClick={toggleTheme}
           className="p-2 rounded-full text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors"
           title="تبديل المظهر"
+          aria-label={theme === 'dark' ? 'تفعيل المظهر الفاتح' : 'تفعيل المظهر الداكن'}
         >
-          {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+          {theme === 'dark' ? <Sun className="w-5 h-5" aria-hidden="true" /> : <Moon className="w-5 h-5" aria-hidden="true" />}
         </button>
 
         {/* Notifications */}
@@ -198,6 +199,7 @@ export function TopBar({ accounts, selectedAccountId, onAccountChange, currentUs
             onClick={() => setShowProfile(!showProfile)}
             aria-haspopup="menu"
             aria-expanded={showProfile}
+            aria-label="قائمة الملف الشخصي"
             className="flex items-center gap-2 pl-1 pr-2 py-1 rounded-full hover:bg-[var(--bg-hover)] transition-colors"
           >
             <div
