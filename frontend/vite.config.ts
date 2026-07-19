@@ -13,6 +13,15 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          "vendor-react": ["react", "react-dom", "react-router-dom"],
+          "vendor-motion": ["gsap", "@gsap/react"],
+          "vendor-charts": ["recharts"],
+        },
+      },
+    },
   },
   server: {
     port: 5173,
