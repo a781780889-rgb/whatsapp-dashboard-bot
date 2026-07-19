@@ -65,6 +65,8 @@ const Avatar = React.forwardRef<HTMLDivElement, AvatarProps>(
             src={src}
             alt={name ?? "صورة المستخدم"}
             onError={() => setImgError(true)}
+            loading="lazy"
+            decoding="async"
             className="h-full w-full rounded-full object-cover border border-[var(--border-default)]"
           />
         ) : (
