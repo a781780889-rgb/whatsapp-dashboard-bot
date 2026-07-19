@@ -18,10 +18,28 @@ export function registerMotionPlugins() {
   registered = true;
 }
 
-/** Respect prefers-reduced-motion across the entire motion layer. */
-export const prefersReducedMotion = () =>
+/** Respect prefers-reduced-motion across the entire motion layer.
+ *  Cached + live-updated via a change listener so a user flipping the OS
+ *  setting mid-session is honored immediately without a page reload. */
+let _reducedMotion =
   typeof window !== 'undefined' &&
   window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+if (typeof window !== 'undefined' && window.matchMedia) {
+  const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+  const handler = (e: MediaQueryListEvent) => {
+    _reducedMotion = e.matches;
+    if (e.matches) {
+      // Immediately stop any in-flight/looping tweens (e.g. skeleton shimmer,
+      // magnetic hover) so the change takes effect without waiting for the
+      // next interaction.
+      gsap.globalTimeline.getChildren().forEach((tween) => tween.progress(1));
+    }
+  };
+  mq.addEventListener?.('change', handler);
+}
+
+export const prefersReducedMotion = () => _reducedMotion;
 
 /* ------------------------------------------------------------------ */
 /* Preset #10/#11 — Page Transition (Subtle/Standard, route change)    */
