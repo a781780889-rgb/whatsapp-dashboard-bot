@@ -196,22 +196,55 @@ class AccountController {
             if (!account) return res.status(404).json({ success: false, error: 'Account not found' });
 
             const accountDB = await DatabaseManager.getAccountDB(id);
-            const [groupsRow, adsRow, msgsRow, schedulesRow, linksRow] = await Promise.all([
-                accountDB.get(`SELECT COUNT(*) as cnt FROM groups`),
-                accountDB.get(`SELECT COUNT(*) as cnt FROM ad_library WHERE is_active = TRUE`),
-                accountDB.get(`SELECT COUNT(*) as cnt FROM messages`),
-                accountDB.get(`SELECT COUNT(*) as cnt FROM broadcast_schedules WHERE status = 'active'`),
-                accountDB.get(`SELECT COUNT(*) as cnt FROM extracted_links`),
+
+            // [FIX-STATS-FLAKY] فحص وجود الجداول قبل الاستعلام —
+            // جدول `messages` غير موجود في المخطط الأصلي، وجدول `extracted_links`
+            // لا يُنشأ إلا عند أول زيارة لصفحة الروابط، فاستعلام مباشر على
+            // جدول مفقود كان يرمي خطأ 500 ويظهر للمستخدم "تعذر جلب إحصائيات الحساب".
+            const exists = async (tableName) => {
+                try {
+                    const r = await accountDB.get(
+                        `SELECT to_regclass($1) AS oid`, [tableName]
+                    );
+                    return !!(r && r.oid);
+                } catch { return false; }
+            };
+
+            const [groupsExists, adsExists, msgsExists, schedExists, linksExists] = await Promise.all([
+                exists('groups'),
+                exists('ad_library'),
+                exists('messages'),
+                exists('broadcast_schedules'),
+                exists('extracted_links'),
+            ]);
+
+            const safeCount = async (sql, tableExists) => {
+                if (!tableExists) return 0;
+                try {
+                    const row = await accountDB.get(sql);
+                    return parseInt(row?.cnt || 0);
+                } catch (err) {
+                    console.warn(`[AccountStats] count failed for ${sql}:`, err.message);
+                    return 0;
+                }
+            };
+
+            const [groupsCount, adsCount, msgsCount, schedCount, linksCount] = await Promise.all([
+                safeCount(`SELECT COUNT(*) as cnt FROM groups`, groupsExists),
+                safeCount(`SELECT COUNT(*) as cnt FROM ad_library WHERE is_active = TRUE`, adsExists),
+                safeCount(`SELECT COUNT(*) as cnt FROM messages`, msgsExists),
+                safeCount(`SELECT COUNT(*) as cnt FROM broadcast_schedules WHERE status = 'active'`, schedExists),
+                safeCount(`SELECT COUNT(*) as cnt FROM extracted_links`, linksExists),
             ]);
 
             const result = {
                 success: true,
                 stats: {
-                    groups:          parseInt(groupsRow?.cnt  || 0),
-                    activeAds:       parseInt(adsRow?.cnt     || 0),
-                    messagesSent:    parseInt(msgsRow?.cnt    || 0),
-                    activeSchedules: parseInt(schedulesRow?.cnt || 0),
-                    extractedLinks:  parseInt(linksRow?.cnt   || 0),
+                    groups:          groupsCount,
+                    activeAds:       adsCount,
+                    messagesSent:    msgsCount,
+                    activeSchedules: schedCount,
+                    extractedLinks:  linksCount,
                     role:            account.role,
                     taskStatus:      account.task_status,
                     lastActivity:    account.last_activity_at,
@@ -222,7 +255,14 @@ class AccountController {
             await CacheService.set(cacheKey, result, CacheService.TTL.STATS);
             return res.json(result);
         } catch (error) {
-            return res.status(500).json({ success: false, error: 'Internal Server Error' });
+            console.error('[AccountController] getAccountStats:', error.message);
+            // [FIX-STATS-FLAKY] رجوع آمن: إرجاع إحصائيات صفرية بدل فشل كامل
+            // حتى لا تبقى اللوحة عالقة على "تعذر تحميل الإحصائيات".
+            return res.json({
+                success: true,
+                degraded: true,
+                stats: { groups: 0, activeAds: 0, messagesSent: 0, activeSchedules: 0, extractedLinks: 0, role: null, taskStatus: null, lastActivity: null, healthStatus: null },
+            });
         }
     }
 
