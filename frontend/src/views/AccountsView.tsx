@@ -735,8 +735,9 @@ export default function AccountsView({
         </div>
         <div className="flex items-center gap-2 w-full sm:w-auto">
           {filtered.length > 0 && (
-            <Tooltip>
-              <TooltipTrigger asChild>
+            <TooltipProvider delayDuration={300}>
+              <Tooltip>
+                <TooltipTrigger asChild>
                 <button
                   onClick={toggleSelectAllFiltered}
                   className="hidden sm:flex items-center justify-center w-9 h-9 rounded-lg border border-[var(--border-default)] hover:border-[var(--border-strong)] transition-colors shrink-0"
@@ -747,9 +748,10 @@ export default function AccountsView({
                     onCheckedChange={toggleSelectAllFiltered}
                   />
                 </button>
-              </TooltipTrigger>
-              <TooltipContent>تحديد الكل</TooltipContent>
-            </Tooltip>
+                </TooltipTrigger>
+                <TooltipContent>تحديد الكل</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           )}
           <div className="relative flex-1 sm:w-52">
             <Search className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[var(--text-muted)]" />
