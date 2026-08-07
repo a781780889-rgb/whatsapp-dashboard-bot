@@ -1,30 +1,44 @@
 'use strict';
 /**
- * PostgreSQL Pool — pg
- * Section 5.2 / 16.3 من وثيقة التحليل
- * Fix: keepAlive + reduced pool size + reconnect on error
+ * postgres.js — المصدر الوحيد (Single Source of Truth) لاتصال PostgreSQL في المشروع
+ * ─────────────────────────────────────────────────────────────────────────────
+ * توحيد طبقة قاعدة البيانات (Database Unification):
+ *  - كل وحدات المشروع (SystemDB, DatabaseManager, المحللون، الخدمات، المتحكمون)
+ *    تستخدم الـ pool المركزي الوحيد في هذا الملف — لا يُسمح بإنشاء pool جديد
+ *    من `pg` مباشرة في أي مكان آخر.
+ *  - إعدادات موحّدة: keepAlive + إعادة إنشاء الـ pool تلقائيًا عند انقطاع
+ *    الاتصال + DB_POOL_MAX قابل للضبط من البيئة.
+ *  - دعم Schemas: createAccountPool(schemaName) — اتصال عميل مخصّص لكل حساب
+ *    (acc_<id>) مع SET search_path، لإعادة استخدام نفس إعدادات الاتصال.
+ *
+ * الاستخدام:
+ *   const { query, queryOne, queryAll, getClient, createAccountPool, closeAll } = require('./lib/postgres');
  */
 const { Pool } = require('pg');
 
 let pool = null;
 
-function createPool() {
+// إعدادات الاتصال المشتركة (تُطبَّق على كل الـ pools في المشروع)
+function poolOptions(overrides = {}) {
     const connectionString = process.env.DATABASE_URL;
     if (!connectionString) {
         throw new Error('[PostgreSQL] DATABASE_URL is required.');
     }
 
-    const sslEnabled = process.env.DATABASE_SSL !== 'false';
-
-    const p = new Pool({
+    const isLocal = connectionString.includes('localhost') || connectionString.includes('127.0.0.1');
+    return Object.assign({
         connectionString,
-        ssl: sslEnabled ? { rejectUnauthorized: false } : false,
-        max: parseInt(process.env.DB_POOL_MAX || '5', 10),      // ✅ خُفِّض من 20 إلى 5
-        idleTimeoutMillis: 60000,                                 // ✅ زيادة وقت الانتظار
-        connectionTimeoutMillis: 10000,                           // ✅ وقت أطول للاتصال
-        keepAlive: true,                                          // ✅ منع انقطاع الاتصال
-        keepAliveInitialDelayMillis: 10000,                       // ✅ إرسال keepalive بعد 10 ثوان
-    });
+        ssl: isLocal ? false : { rejectUnauthorized: false },
+        max: parseInt(process.env.DB_POOL_MAX || '5', 10),
+        idleTimeoutMillis: 60000,
+        connectionTimeoutMillis: 10000,
+        keepAlive: true,
+        keepAliveInitialDelayMillis: 10000,
+    }, overrides);
+}
+
+function createPool(opts = {}) {
+    const p = new Pool(poolOptions(opts));
 
     p.on('connect', () => {
         console.log('[PostgreSQL] New client connected.');
@@ -79,4 +93,53 @@ async function getClient() {
     return getPool().connect();
 }
 
-module.exports = { getPool, query, queryOne, queryAll, getClient };
+/**
+ * createAccountPool — عميل اتصال مخصّص لـ schema حساب محدد
+ * (acc_<accountId>) مع SET search_path لكل استعلام.
+ * يعيد استخدام نفس إعدادات الاتصال الموحّدة (ssl, keepAlive, timeouts).
+ */
+function createAccountPool(accountId, schemaName) {
+    // إعدادات مخصصة: اتصال واحد مُعاد استخدامه (max: 2) لعملاء الـ schemas
+    const opts = poolOptions({ max: 2 });
+    const p = new Pool(opts);
+
+    p.on('error', (err) => {
+        console.error(`[PostgreSQL:acc-${accountId}] Pool error:`, err.message);
+    });
+
+    return {
+        async query(sql, params = []) {
+            const client = await p.connect();
+            try {
+                await client.query(`SET search_path TO "${schemaName}", public`);
+                return await client.query(sql, params);
+            } finally {
+                client.release();
+            }
+        },
+        async get(sql, params = []) {
+            const r = await this.query(sql, params);
+            return r.rows[0] || null;
+        },
+        async all(sql, params = []) {
+            const r = await this.query(sql, params);
+            return r.rows;
+        },
+        async run(sql, params = []) {
+            const r = await this.query(sql, params);
+            return { rowCount: r.rowCount };
+        },
+        async end() {
+            await p.end();
+        },
+    };
+}
+
+/**
+ * closeAll — إغلاق كل pools في الخادم (للاستخدام عند الإيقاف)
+ */
+async function closeAll() {
+    if (pool) { await pool.end(); pool = null; }
+}
+
+module.exports = { getPool, query, queryOne, queryAll, getClient, createAccountPool, closeAll, poolOptions };

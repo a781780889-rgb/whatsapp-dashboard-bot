@@ -1,57 +1,17 @@
 'use strict';
 /**
  * DatabaseManager — Per-Account PostgreSQL Schema Manager
+ * ─────────────────────────────────────────────────────────────────────
+ * [DB-UNIFY] توحيد طبقة قاعدة البيانات:
+ *  - DatabaseManager لم يعد يُنشئ pool مستقلًا من `pg` مباشرة.
+ *  - إنشاء الـ schema لكل حساب + عميل الاتصال المخصّص (search_path) يتم
+ *    عبر الـ pool المركزي الوحيد في `src/lib/postgres.js` (createAccountPool)،
+ *    لضمان إعدادات اتصال موحّدة (ssl, keepAlive, reconnect, DB_POOL_MAX).
  */
-const { Pool } = require('pg');
+const { getPool, createAccountPool } = require('../lib/postgres');
 const SystemDB = require('./SystemDB');
 
-let pool = null;
-
-function getPool() {
-    if (!pool) {
-        pool = new Pool({
-            connectionString: process.env.DATABASE_URL,
-            ssl: process.env.DATABASE_URL?.includes('localhost') ? false : { rejectUnauthorized: false },
-            max: 10,
-            idleTimeoutMillis: 60000,
-            connectionTimeoutMillis: 10000,
-            keepAlive: true,
-        });
-        pool.on('error', (err) => console.error('[DatabaseManager] Pool error:', err.message));
-    }
-    return pool;
-}
-
 const accountDBs = new Map();
-
-function createAccountDB(accountId, schemaName) {
-    const p = getPool();
-    return {
-        accountId,
-        schemaName,
-        async query(sql, params = []) {
-            const client = await p.connect();
-            try {
-                await client.query(`SET search_path TO "${schemaName}", public`);
-                return await client.query(sql, params);
-            } finally {
-                client.release();
-            }
-        },
-        async get(sql, params = []) {
-            const r = await this.query(sql, params);
-            return r.rows[0] || null;
-        },
-        async all(sql, params = []) {
-            const r = await this.query(sql, params);
-            return r.rows;
-        },
-        async run(sql, params = []) {
-            const r = await this.query(sql, params);
-            return { rowCount: r.rowCount };
-        },
-    };
-}
 
 const ACCOUNT_SCHEMA = (s) => `
 CREATE SCHEMA IF NOT EXISTS "${s}";
@@ -118,8 +78,9 @@ const DatabaseManager = {
         if (accountDBs.has(accountId)) return accountDBs.get(accountId);
 
         const schemaName = `acc_${accountId.replace(/-/g, '_')}`;
-        const p = getPool();
-        const client = await p.connect();
+
+        // [DB-UNIFY] تطبيق الـ schema عبر عميل من الـ pool المركزي
+        const client = await getPool().connect();
         try {
             // تشغيل كل statement منفصلاً لضمان تطبيق ALTER TABLE
             const schemaSQL = ACCOUNT_SCHEMA(schemaName);
@@ -142,15 +103,16 @@ const DatabaseManager = {
             client.release();
         }
 
-        const db = createAccountDB(accountId, schemaName);
+        // [DB-UNIFY] عميل اتصال مخصّص بـ search_path من الـ pool المركزي
+        const db = createAccountPool(accountId, schemaName);
         accountDBs.set(accountId, db);
         return db;
     },
 
     async closeAll() {
         accountDBs.clear();
+        // [DB-UNIFY] إغلاق الـ pool المركزي الوحيد
         await SystemDB.close();
-        if (pool) { await pool.end(); pool = null; }
     },
 };
 

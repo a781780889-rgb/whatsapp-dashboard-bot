@@ -1,23 +1,15 @@
 'use strict';
-const { Pool } = require('pg');
+/**
+ * SystemDB — إدارة مخطط قاعدة البيانات الرئيسية (النظام)
+ * ─────────────────────────────────────────────────────────────────────
+ * [DB-UNIFY] توحيد طبقة قاعدة البيانات:
+ *  - SystemDB لم يعد يُنشئ pool مستقلًا من `pg` مباشرة.
+ *  - كل الاستعلامات تمر عبر الـ pool المركزي الوحيد في `src/lib/postgres.js`
+ *    (يضمن إعدادات موحّدة: keepAlive، reconnect، DB_POOL_MAX).
+ */
+const { getPool, closeAll: closePgPool } = require('../lib/postgres');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
-
-let pool = null;
-
-function getPool() {
-    if (!pool) {
-        pool = new Pool({
-            connectionString: process.env.DATABASE_URL,
-            ssl: process.env.DATABASE_URL?.includes('localhost') ? false : { rejectUnauthorized: false },
-            max: 20,
-            idleTimeoutMillis: 30000,
-            connectionTimeoutMillis: 10000,
-        });
-        pool.on('error', (err) => console.error('[SystemDB] Pool error:', err.message));
-    }
-    return pool;
-}
 
 const SystemDB = {
     async init() {
@@ -251,7 +243,7 @@ const SystemDB = {
             END $$;
         `).catch(() => {});
 
-        // ── [إصلاح تسجيل الدخول] Migration: استكمال أعمدة جدول refresh_tokens —
+        // ── [إصلاح تسجيل الدخول] Migration: استكمال أعمدة جدول refresh_tokens ──
         //    جدول refresh_tokens في قاعدة بيانات الإنتاج قديم جداً (أُنشئ قبل
         //    اكتمال ميزة "تتبّع عائلة التوكنات" / اكتشاف إعادة الاستخدام)،
         //    و`CREATE TABLE IF NOT EXISTS` لا يضيف أعمدة جديدة لجدول موجود
@@ -330,12 +322,11 @@ const SystemDB = {
         ).catch(() => null);
     },
 
+    // [DB-UNIFY] إغلاق الـ pool المركزي الوحيد
     async close() {
-        if (pool) { await pool.end(); pool = null; }
-    }
+        await closePgPool();
+    },
 };
-
-module.exports = SystemDB;
 
 // ── دوال إضافية مطلوبة من AuthController ────────────────────────────────────
 
@@ -362,7 +353,7 @@ Object.assign(SystemDB, {
     // الكتابة...)، يبقى الـ refresh token صالحاً تشفيرياً (JWT موقّع بنجاح)
     // لكن بلا أي صف مطابق في قاعدة البيانات. أول محاولة refresh حقيقية بهذا
     // التوكن كانت تُفسَّر خطأً على أنها "إعادة استخدام" (لأن findRefreshToken
-    // ترجع null)، فيُعتبر الـ family كله "مخترقاً" وتُبطَل الجلسة بالكامل رغم
+    // ترجع null)، فيُعتبر الـ family كله "مخترقاً" وتُبطل الجلسة بالكامل رغم
     // أنه أول استخدام فعلي — بالضبط ما ظهر في سجلات النشر: "[Auth] REUSE
     // DETECTED" فور تسجيل الدخول رغم عدم وجود أي سرقة حقيقية. الآن الخطأ
     // يُرفع للأعلى ليتعامل معه المستدعي (issue/refresh) صراحة بدل الفشل الصامت.
@@ -414,3 +405,5 @@ Object.assign(SystemDB, {
         ).catch(() => {});
     },
 });
+
+module.exports = SystemDB;
