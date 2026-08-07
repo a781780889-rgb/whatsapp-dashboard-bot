@@ -1,1 +1,6 @@
 backend/.env
+backend/node_modules/
+backups/
+test_stats.py
+test_stats2.py
+test_stats.sh
