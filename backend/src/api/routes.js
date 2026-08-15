@@ -251,6 +251,7 @@ router.get('/links/import/files', auth, LinkImportController.files.bind(LinkImpo
 router.get('/links/import/files/:fileId', auth, LinkImportController.file.bind(LinkImportController));
 router.get('/links/import/accounts', auth, LinkImportController.accounts.bind(LinkImportController));
 router.post('/links/import/start', auth, LinkImportController.start.bind(LinkImportController));
+router.get('/links/import/jobs', auth, LinkImportController.jobs.bind(LinkImportController));
 router.get('/links/import/jobs/:jobId', auth, LinkImportController.job.bind(LinkImportController));
 router.post('/links/import/jobs/:jobId/:action', auth, LinkImportController.control.bind(LinkImportController));
 

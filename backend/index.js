@@ -47,6 +47,7 @@ const QueueManager       = require('./src/lib/QueueManager');
 const DatabaseManager    = require('./src/database/DatabaseManager');
 const SystemDB           = require('./src/database/SystemDB');
 const WhatsAppManager    = require('./src/bot/WhatsAppManager');
+const LinkImportService  = require('./src/api/services/LinkImportService');
 const JobScheduler       = require('./src/scheduler/JobScheduler');
 const TelegramService    = require('./src/api/services/TelegramService');
 const AccountRoleEngine  = require('./src/api/services/AccountRoleEngine');
@@ -335,6 +336,8 @@ async function bootstrap() {
         _registerQueueHandlers();
         await QueueManager.start();
         logger.info('[Phase4] QueueManager started. Queues: wa-campaigns, wa-sync, wa-notifications');
+        await LinkImportService.startWorker();
+        logger.info('[LinkImportWorker] Persistent link import worker started.');
 
         // 6. Start AccountRoleEngine
         AccountRoleEngine.setDependencies(JobScheduler, WhatsAppManager);
@@ -369,6 +372,7 @@ function setupGracefulShutdown() {
             AccountRoleEngine.stop();
             await JobScheduler.stop();
             // [FIX-20] إيقاف QueueManager قبل RedisManager
+            LinkImportService.stopWorker();
             await QueueManager.stop();
             require('./src/api/services/GroupSyncService').stop();
             await DatabaseManager.closeAll();
