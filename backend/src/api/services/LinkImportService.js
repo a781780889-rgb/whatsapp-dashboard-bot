@@ -19,13 +19,23 @@ function inviteCode(url) {
 }
 function extractDocxText(base64) {
   const zip = new AdmZip(Buffer.from(String(base64 || ''), 'base64'));
-  const xmlParts = zip.getEntries().filter(entry => /^word\/(document|header|footer|footnotes|endnotes)\.xml$/i.test(entry.entryName)).map(entry => entry.getData().toString('utf8'));
+  const entries = zip.getEntries();
+  const xmlParts = entries.filter(entry => /^word\/(document|header|footer|footnotes|endnotes)\.xml$/i.test(entry.entryName)).map(entry => entry.getData().toString('utf8'));
   if (!xmlParts.length) throw new Error('ملف Word لا يحتوي على مستند قابل للقراءة');
-  return xmlParts.join('\n').replace(/<w:tab\s*\/>/gi, '\t').replace(/<w:br\s*\/>/gi, '\n').replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\s+/g, ' ');
+  const relationshipTargets = entries.filter(entry => /^word\//.test(entry.entryName) && /\.rels$/i.test(entry.entryName)).flatMap(entry => {
+    const xml = entry.getData().toString('utf8');
+    return [...xml.matchAll(/Target=["'](https?:\/\/[^"']+)["']/gi)].map(match => match[1]);
+  });
+  const text = xmlParts.join('\n').replace(/<w:tab\s*\/?/gi, '\t').replace(/<w:br\s*\/?/gi, '\n').replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\s+/g, ' ');
+  const inlineUrls = [...xmlParts.join('\n').matchAll(/https?:\/\/[^\s"'<]+/gi)].map(match => match[0]);
+  return [text, ...relationshipTargets, ...inlineUrls].join('\n');
 }
 function extractInboundValues(content, fileName = '', encoding = 'text') {
   const ext = String(fileName).toLowerCase().split('.').pop();
-  if (ext === 'docx') return [extractDocxText(content)];
+  if (ext === 'docx') {
+    const text = extractDocxText(content);
+    return [...new Set(text.match(/https?:\/\/[^\s\"'<]+/gi) || [])];
+  }
   const raw = String(content || '');
   if (ext === 'json') {
     try {
