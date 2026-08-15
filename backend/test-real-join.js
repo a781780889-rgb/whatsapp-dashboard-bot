@@ -1,0 +1,22 @@
+const assert = require('assert');
+const WhatsAppManager = require('./src/bot/WhatsAppManager');
+const GroupJoinerService = require('./src/api/services/GroupJoinerService');
+const originalSession = WhatsAppManager.getSession;
+const originalReady = WhatsAppManager.isReady;
+(async () => {
+  WhatsAppManager.getSession = () => null;
+  WhatsAppManager.isReady = () => false;
+  let result = await GroupJoinerService._doJoin('offline', 'https://chat.whatsapp.com/AbCdEf123456789012345678');
+  assert.equal(result.status, 'account_offline');
+  result = await GroupJoinerService._doJoin('offline', 'not-a-link');
+  assert.equal(result.status, 'account_offline');
+  WhatsAppManager.getSession = () => ({ groupAcceptInvite: async () => '12345@g.us' });
+  WhatsAppManager.isReady = () => true;
+  result = await GroupJoinerService._doJoin('ready', 'https://chat.whatsapp.com/AbCdEf123456789012345678');
+  assert.equal(result.status, 'joined'); assert.equal(result.confirmed, true);
+  WhatsAppManager.getSession = () => ({ groupAcceptInvite: async () => { throw new Error('already a participant'); } });
+  result = await GroupJoinerService._doJoin('ready', 'https://chat.whatsapp.com/AbCdEf123456789012345678');
+  assert.equal(result.status, 'already_joined'); assert.equal(result.success, true);
+  WhatsAppManager.getSession = originalSession; WhatsAppManager.isReady = originalReady;
+  console.log('real-join-outcomes: ok');
+})().catch(error => { WhatsAppManager.getSession = originalSession; WhatsAppManager.isReady = originalReady; throw error; });

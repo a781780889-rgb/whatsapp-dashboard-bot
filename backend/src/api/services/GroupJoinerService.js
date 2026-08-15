@@ -239,26 +239,24 @@ class GroupJoinerService {
     // ── [البند 1] تنفيذ الانضمام الفعلي فقط — منفصل عن منطق الحماية أعلاه
     //    لإبقاء كل مسار (محمي / غير محمي fallback) يستدعي نفس الكود الفعلي ───
     async _doJoin(accountId, link) {
+        const rawLink = String(link || '');
         try {
             const sock = WhatsAppManager.getSession(accountId);
-            if (!sock) {
-                console.warn(`[GroupJoiner] No session for account ${accountId}`);
-                return { success: false, error: 'الحساب غير متصل' };
-            }
-
-            const code = this._extractInviteCode(link);
-            if (!code) {
-                return { success: false, error: 'رابط دعوة غير صالح أو غير مدعوم' };
-            }
-
+            if (!sock || !WhatsAppManager.isReady(accountId)) return { success: false, status: 'account_offline', retryable: true, error: 'جلسة الحساب غير متصلة أو غير جاهزة' };
+            const code = this._extractInviteCode(rawLink);
+            if (!code) return { success: false, status: 'invalid_link', retryable: false, error: 'رابط دعوة واتساب غير صالح' };
             const groupId = await sock.groupAcceptInvite(code);
-            console.log(`[GroupJoiner] ✅ Joined ${groupId} via account ${accountId}`);
-            return { success: true, groupId };
-
+            if (!groupId) return { success: false, status: 'retry', retryable: true, error: 'لم تصل استجابة تأكيد من واتساب' };
+            console.log(`[GroupJoiner] ✅ WhatsApp confirmed join ${groupId} via account ${accountId}`);
+            return { success: true, status: 'joined', confirmed: true, groupId };
         } catch (err) {
-            console.error(`[GroupJoiner] ❌ ${link}:`, err.message);
-            const friendly = this._friendlyError(err.message);
-            return { success: false, error: friendly, _rawError: err.message };
+            const message = String(err?.message || err || 'خطأ غير معروف');
+            const lower = message.toLowerCase();
+            if (/already|participant|member|in-group|409/.test(lower)) return { success: true, status: 'already_joined', confirmed: true, error: 'الحساب منضم مسبقاً' };
+            if (/pending|approval|admin.?approv|request.?sent|等待/.test(lower)) return { success: false, status: 'pending_approval', retryable: false, error: 'بانتظار موافقة مشرف المجموعة' };
+            if (/not-authorized|unauthorized|forbidden|invite.*(expired|invalid)|bad-request|not-found|404/.test(lower)) return { success: false, status: 'invalid_link', retryable: false, error: this._friendlyError(message) };
+            if (/connection|connect|timeout|timed out|network|socket|temporar|503|500/.test(lower)) return { success: false, status: 'retry', retryable: true, error: 'خطأ مؤقت في الاتصال بواتساب', rawError: message };
+            return { success: false, status: 'failed', retryable: false, error: this._friendlyError(message), rawError: message };
         }
     }
 

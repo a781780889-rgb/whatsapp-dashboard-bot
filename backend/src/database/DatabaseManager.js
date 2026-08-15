@@ -66,6 +66,11 @@ CREATE TABLE IF NOT EXISTS pairing_attempts (id UUID PRIMARY KEY DEFAULT gen_ran
 CREATE TABLE IF NOT EXISTS schema_migrations (version INT PRIMARY KEY, name TEXT, applied_at TIMESTAMPTZ DEFAULT NOW());
 CREATE TABLE IF NOT EXISTS link_import_files (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), file_name TEXT NOT NULL, file_size BIGINT DEFAULT 0, total_links INT DEFAULT 0, valid_links INT DEFAULT 0, duplicate_links INT DEFAULT 0, invalid_links INT DEFAULT 0, processed_links INT DEFAULT 0, status VARCHAR(30) DEFAULT 'ready', operation_id UUID, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT NOW());
 CREATE TABLE IF NOT EXISTS link_import_items (id BIGSERIAL PRIMARY KEY, file_id UUID NOT NULL REFERENCES link_import_files(id) ON DELETE CASCADE, url TEXT NOT NULL, status VARCHAR(30) DEFAULT 'pending', assigned_account_id UUID, result JSONB, started_at TIMESTAMPTZ, processed_at TIMESTAMPTZ, UNIQUE(file_id,url));
+ALTER TABLE link_import_jobs ADD COLUMN IF NOT EXISTS max_attempts INT DEFAULT 3;
+ALTER TABLE link_import_items ADD COLUMN IF NOT EXISTS attempts INT DEFAULT 0;
+ALTER TABLE link_import_items ADD COLUMN IF NOT EXISTS max_attempts INT DEFAULT 3;
+ALTER TABLE link_import_items ADD COLUMN IF NOT EXISTS last_error TEXT;
+ALTER TABLE link_import_items ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_link_import_items_file_status ON link_import_items(file_id,status);
 CREATE TABLE IF NOT EXISTS link_import_jobs (id UUID PRIMARY KEY, file_id UUID NOT NULL REFERENCES link_import_files(id) ON DELETE CASCADE, status VARCHAR(30) DEFAULT 'queued', selected_account_ids JSONB NOT NULL DEFAULT '[]', total INT DEFAULT 0, processed INT DEFAULT 0, successful INT DEFAULT 0, failed INT DEFAULT 0, skipped INT DEFAULT 0, min_delay INT DEFAULT 30, max_delay INT DEFAULT 60, next_run_at TIMESTAMPTZ, started_at TIMESTAMPTZ, last_activity_at TIMESTAMPTZ, last_attempt_at TIMESTAMPTZ, last_error TEXT, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW());
 CREATE INDEX IF NOT EXISTS idx_link_import_jobs_status ON link_import_jobs(status);
