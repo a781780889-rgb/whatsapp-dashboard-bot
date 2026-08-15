@@ -1,0 +1,12 @@
+const assert = require('assert');
+const AdmZip = require('adm-zip');
+const service = require('./src/api/services/LinkImportService');
+const zip = new AdmZip();
+zip.addFile('word/document.xml', Buffer.from('<w:document xmlns:w="x"><w:body><w:p><w:r><w:t>رابط https://chat.whatsapp.com/AbCdEf1234567890</w:t></w:r></w:p></w:body></w:document>'));
+const base64 = zip.toBuffer().toString('base64');
+const text = service.extractDocxText(base64);
+assert.match(text, /https:\/\/chat\.whatsapp\.com\/AbCdEf1234567890/);
+const values = service.extractInboundValues(base64, 'links.docx');
+assert.equal(values.length, 1);
+assert.match(values[0], /AbCdEf1234567890/);
+console.log('docx-import: ok');

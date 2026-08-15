@@ -2,6 +2,7 @@ const DatabaseManager = require('../../database/DatabaseManager');
 const WhatsAppManager = require('../../bot/WhatsAppManager');
 const GroupJoinerService = require('./GroupJoinerService');
 const { randomUUID } = require('crypto');
+const AdmZip = require('adm-zip');
 
 const jobs = new Map();
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -16,9 +17,16 @@ function normaliseUrl(value) {
 function inviteCode(url) {
   return String(url || '').match(/(?:chat\.whatsapp\.com\/|whatsapp\.com\/invite\/)([A-Za-z0-9_-]{10,})/i)?.[1] || null;
 }
-function extractInboundValues(content, fileName = '') {
-  const raw = String(content || '');
+function extractDocxText(base64) {
+  const zip = new AdmZip(Buffer.from(String(base64 || ''), 'base64'));
+  const xmlParts = zip.getEntries().filter(entry => /^word\/(document|header|footer|footnotes|endnotes)\.xml$/i.test(entry.entryName)).map(entry => entry.getData().toString('utf8'));
+  if (!xmlParts.length) throw new Error('ملف Word لا يحتوي على مستند قابل للقراءة');
+  return xmlParts.join('\n').replace(/<w:tab\s*\/>/gi, '\t').replace(/<w:br\s*\/>/gi, '\n').replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\s+/g, ' ');
+}
+function extractInboundValues(content, fileName = '', encoding = 'text') {
   const ext = String(fileName).toLowerCase().split('.').pop();
+  if (ext === 'docx') return [extractDocxText(content)];
+  const raw = String(content || '');
   if (ext === 'json') {
     try {
       const parsed = JSON.parse(raw); const values = [];
@@ -31,10 +39,10 @@ function extractInboundValues(content, fileName = '') {
 }
 
 class LinkImportService {
-  async importFile({ accountId, fileName, content }) {
+  async importFile({ accountId, fileName, content, encoding = 'text' }) {
     const db = await DatabaseManager.getAccountDB(accountId);
     const seen = new Set(); const links = []; let duplicateCount = 0; let invalidCount = 0;
-    for (const line of extractInboundValues(content, fileName)) {
+    for (const line of extractInboundValues(content, fileName, encoding)) {
       const url = normaliseUrl(line);
       if (!url || !inviteCode(url)) { if (line.trim()) invalidCount++; continue; }
       const key = url.toLowerCase();
@@ -105,3 +113,4 @@ module.exports = new LinkImportService();
 module.exports.normaliseUrl = normaliseUrl;
 module.exports.inviteCode = inviteCode;
 module.exports.extractInboundValues = extractInboundValues;
+module.exports.extractDocxText = extractDocxText;
