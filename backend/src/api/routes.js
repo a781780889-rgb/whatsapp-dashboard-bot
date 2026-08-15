@@ -245,6 +245,15 @@ router.put('/accounts/:accountId/links/join-settings', auth, LinkScanController.
 // ══════════════════════════════════════════════════════
 //  LINK JOIN SYSTEM — نظام الانضمام بالروابط (متعدد الحسابات)
 // ══════════════════════════════════════════════════════
+const LinkImportController = require('./controllers/LinkImportController');
+router.post('/links/import/files', auth, LinkImportController.import.bind(LinkImportController));
+router.get('/links/import/files', auth, LinkImportController.files.bind(LinkImportController));
+router.get('/links/import/files/:fileId', auth, LinkImportController.file.bind(LinkImportController));
+router.get('/links/import/accounts', auth, LinkImportController.accounts.bind(LinkImportController));
+router.post('/links/import/start', auth, LinkImportController.start.bind(LinkImportController));
+router.get('/links/import/jobs/:jobId', auth, LinkImportController.job.bind(LinkImportController));
+router.post('/links/import/jobs/:jobId/:action', auth, LinkImportController.control.bind(LinkImportController));
+
 const LinkJoinController = require('./controllers/LinkJoinController');
 
 // لوحة التحكم الرئيسية والإحصائيات

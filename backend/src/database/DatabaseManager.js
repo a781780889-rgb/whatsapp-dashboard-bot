@@ -64,6 +64,9 @@ CREATE TABLE IF NOT EXISTS diagnostics (id UUID PRIMARY KEY DEFAULT gen_random_u
 CREATE TABLE IF NOT EXISTS business_api_settings (id INT PRIMARY KEY DEFAULT 1, phone_number_id TEXT, access_token TEXT, webhook_verify_token TEXT, settings JSONB DEFAULT '{}', updated_at TIMESTAMPTZ DEFAULT NOW());
 CREATE TABLE IF NOT EXISTS pairing_attempts (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), phone TEXT, code TEXT, status VARCHAR(50), latency_ms INT, created_at TIMESTAMPTZ DEFAULT NOW());
 CREATE TABLE IF NOT EXISTS schema_migrations (version INT PRIMARY KEY, name TEXT, applied_at TIMESTAMPTZ DEFAULT NOW());
+CREATE TABLE IF NOT EXISTS link_import_files (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), file_name TEXT NOT NULL, file_size BIGINT DEFAULT 0, total_links INT DEFAULT 0, valid_links INT DEFAULT 0, duplicate_links INT DEFAULT 0, invalid_links INT DEFAULT 0, processed_links INT DEFAULT 0, status VARCHAR(30) DEFAULT 'ready', operation_id UUID, started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT NOW());
+CREATE TABLE IF NOT EXISTS link_import_items (id BIGSERIAL PRIMARY KEY, file_id UUID NOT NULL REFERENCES link_import_files(id) ON DELETE CASCADE, url TEXT NOT NULL, status VARCHAR(30) DEFAULT 'pending', assigned_account_id UUID, result JSONB, started_at TIMESTAMPTZ, processed_at TIMESTAMPTZ, UNIQUE(file_id,url));
+CREATE INDEX IF NOT EXISTS idx_link_import_items_file_status ON link_import_items(file_id,status);
 `;
 
 const DatabaseManager = {
