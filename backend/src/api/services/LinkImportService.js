@@ -16,12 +16,25 @@ function normaliseUrl(value) {
 function inviteCode(url) {
   return String(url || '').match(/(?:chat\.whatsapp\.com\/|whatsapp\.com\/invite\/)([A-Za-z0-9_-]{10,})/i)?.[1] || null;
 }
+function extractInboundValues(content, fileName = '') {
+  const raw = String(content || '');
+  const ext = String(fileName).toLowerCase().split('.').pop();
+  if (ext === 'json') {
+    try {
+      const parsed = JSON.parse(raw); const values = [];
+      const walk = (value) => { if (typeof value === 'string') values.push(value); else if (Array.isArray(value)) value.forEach(walk); else if (value && typeof value === 'object') Object.values(value).forEach(walk); };
+      walk(parsed); return values;
+    } catch { return raw.split(/\r?\n/); }
+  }
+  if (ext === 'csv') return raw.split(/\r?\n/).flatMap(line => line.split(/[;,\t]/));
+  return raw.split(/\r?\n/);
+}
 
 class LinkImportService {
   async importFile({ accountId, fileName, content }) {
     const db = await DatabaseManager.getAccountDB(accountId);
     const seen = new Set(); const links = []; let duplicateCount = 0; let invalidCount = 0;
-    for (const line of String(content || '').split(/\r?\n/)) {
+    for (const line of extractInboundValues(content, fileName)) {
       const url = normaliseUrl(line);
       if (!url || !inviteCode(url)) { if (line.trim()) invalidCount++; continue; }
       const key = url.toLowerCase();
@@ -91,3 +104,4 @@ class LinkImportService {
 module.exports = new LinkImportService();
 module.exports.normaliseUrl = normaliseUrl;
 module.exports.inviteCode = inviteCode;
+module.exports.extractInboundValues = extractInboundValues;
