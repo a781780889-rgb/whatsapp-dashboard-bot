@@ -4,6 +4,7 @@ class AIAutomationController{
  uid(req){return Service.getUserId(req);}
  async dashboard(req,res){try{res.json({success:true,...await Service.dashboard(this.uid(req))});}catch(e){res.status(500).json({success:false,error:e.message});}}
  async tools(req,res){res.json({success:true,tools:Service.tools()});}
+ async controlCenter(req,res){try{res.json({success:true,...await Service.controlCenter(this.uid(req),req.body?.enabled)});}catch(e){res.status(400).json({success:false,error:e.message});}}
  async agents(req,res){try{res.json({success:true,agents:await Service.agents(this.uid(req))});}catch(e){res.status(500).json({success:false,error:e.message});}}
  async createAgent(req,res){try{res.status(201).json({success:true,agent:await Service.createAgent(this.uid(req),req.body)});}catch(e){res.status(400).json({success:false,error:e.message});}}
  async toggleAgent(req,res){try{res.json({success:true,agent:await Service.toggleAgent(this.uid(req),req.params.id,req.body.status)});}catch(e){res.status(400).json({success:false,error:e.message});}}

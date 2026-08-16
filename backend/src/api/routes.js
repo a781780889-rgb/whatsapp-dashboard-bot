@@ -522,6 +522,7 @@ router.get('/group-numbers/export.csv', auth, GroupNumberController.exportCsv.bi
 const AIAutomationController = require('./controllers/AIAutomationController');
 router.get('/ai-center/dashboard', auth, AIAutomationController.dashboard.bind(AIAutomationController));
 router.get('/ai-center/tools', auth, AIAutomationController.tools.bind(AIAutomationController));
+router.patch('/ai-center/control', auth, AIAutomationController.controlCenter.bind(AIAutomationController));
 router.get('/ai-center/agents', auth, AIAutomationController.agents.bind(AIAutomationController));
 router.post('/ai-center/agents', auth, AIAutomationController.createAgent.bind(AIAutomationController));
 router.patch('/ai-center/agents/:id', auth, AIAutomationController.toggleAgent.bind(AIAutomationController));
