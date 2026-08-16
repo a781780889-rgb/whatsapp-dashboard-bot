@@ -319,6 +319,7 @@ const SystemDB = {
             )
         `);
         await p.query(`CREATE INDEX IF NOT EXISTS idx_group_number_jobs_user ON group_number_jobs(user_id, created_at DESC)`).catch(() => {});
+        await p.query(`CREATE UNIQUE INDEX IF NOT EXISTS ux_group_number_jobs_active_user ON group_number_jobs(user_id) WHERE status IN ('queued','running','paused')`).catch(() => {});
         await p.query(`
             CREATE TABLE IF NOT EXISTS group_numbers (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

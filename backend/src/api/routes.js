@@ -509,6 +509,9 @@ router.get('/group-numbers/jobs/:id', auth, GroupNumberController.job.bind(Group
 router.get('/group-numbers/jobs/:id/activity', auth, GroupNumberController.activity.bind(GroupNumberController));
 router.patch('/group-numbers/jobs/:id', auth, GroupNumberController.control.bind(GroupNumberController));
 router.get('/group-numbers/numbers', auth, GroupNumberController.numbers.bind(GroupNumberController));
+router.get('/group-numbers/numbers/:id', auth, GroupNumberController.number.bind(GroupNumberController));
+router.delete('/group-numbers/numbers', auth, GroupNumberController.deleteNumbers.bind(GroupNumberController));
+router.post('/group-numbers/organize', auth, GroupNumberController.organize.bind(GroupNumberController));
 router.get('/group-numbers/stats', auth, GroupNumberController.stats.bind(GroupNumberController));
 router.get('/group-numbers/countries', auth, GroupNumberController.countries.bind(GroupNumberController));
 router.get('/group-numbers/export.csv', auth, GroupNumberController.exportCsv.bind(GroupNumberController));

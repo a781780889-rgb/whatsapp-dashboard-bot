@@ -43,12 +43,14 @@ const GroupNumberService = {
   normalizePhone,
   classify,
   async createJob(userId, accountIds = []) {
-    let ids = (Array.isArray(accountIds) ? accountIds : []).map(String).filter(Boolean);
+    let ids = [...new Set((Array.isArray(accountIds) ? accountIds : []).map(String).filter(Boolean))];
     if (!ids.length) { const rows = await SystemDB.all(`SELECT id FROM accounts WHERE user_id=$1 AND status='connected' ORDER BY name`, [userId]); ids = rows.map(r => String(r.id)); }
     if (!ids.length) throw new Error('لا يوجد حساب واتساب متصل وجاهز لجمع أرقام المجموعات');
     const owned = await SystemDB.all(`SELECT id,status FROM accounts WHERE user_id=$1 AND id=ANY($2::uuid[])`, [userId, ids]);
     if (owned.length !== ids.length) throw new Error('أحد الحسابات المحددة غير مملوك للمستخدم أو غير موجود');
     const offline = owned.filter(a => a.status !== 'connected'); if (offline.length) throw new Error('يوجد حساب غير متصل ضمن الحسابات المحددة');
+    const active = await SystemDB.get(`SELECT * FROM group_number_jobs WHERE user_id=$1 AND status IN ('queued','running','paused') ORDER BY created_at DESC LIMIT 1`, [userId]);
+    if (active) throw new Error('توجد عملية جمع نشطة بالفعل؛ أوقفها أو استكملها بدلاً من إنشاء عملية جديدة');
     const job = await SystemDB.get(`INSERT INTO group_number_jobs(user_id,account_ids,status,started_at) VALUES($1,$2,'queued',NOW()) RETURNING *`, [userId, JSON.stringify(ids)]);
     await activity(job, 'job_started', `تم إنشاء عملية جمع لأجل ${ids.length} حساب`, { account_ids: ids });
     return job;
@@ -81,9 +83,14 @@ const GroupNumberService = {
     return { rows, total: Number(total?.count || 0), page, pages: Math.ceil(Number(total?.count || 0) / limit) };
   },
   async stats(userId) { const row = await SystemDB.get(`SELECT COUNT(*)::int total,COUNT(*) FILTER(WHERE is_saudi)::int saudi,COUNT(*) FILTER(WHERE NOT is_saudi)::int other,COUNT(*) FILTER(WHERE is_admin)::int admins FROM group_numbers WHERE user_id=$1`, [userId]); const groups = await SystemDB.get(`SELECT COUNT(DISTINCT group_jid)::int groups FROM group_number_sources WHERE user_id=$1`, [userId]); return { ...row, groups: Number(groups?.groups || 0) }; },
+  async getNumber(userId, numberId) { const number = await SystemDB.get(`SELECT * FROM group_numbers WHERE id=$1 AND user_id=$2`, [numberId, userId]); if (!number) return null; const sources = await SystemDB.all(`SELECT account_id,group_jid,group_name,is_admin,first_seen_at,last_seen_at FROM group_number_sources WHERE number_id=$1 AND user_id=$2 ORDER BY last_seen_at DESC`, [numberId, userId]); return { ...number, sources }; },
+  async deleteNumbers(userId, ids) { const safeIds = [...new Set((Array.isArray(ids) ? ids : []).map(String).filter(Boolean))]; if (!safeIds.length) throw new Error('لم يتم تحديد أرقام للحذف'); const deleted = await SystemDB.all(`DELETE FROM group_numbers WHERE user_id=$1 AND id=ANY($2::uuid[]) RETURNING id`, [userId, safeIds]); return { deleted: deleted.length, stats: await this.stats(userId) }; },
+  async organize(userId) { const stats = await this.stats(userId); return { organized: true, stats, message: 'البيانات محفوظة بصيغة موحّدة والتكرارات مدمجة فعلياً بقاعدة البيانات' }; },
   async control(userId, jobId, action) { const job = await this.getJob(userId, jobId); if (!job) throw new Error('العملية غير موجودة'); const status = action === 'pause' ? 'paused' : action === 'resume' ? 'queued' : action === 'cancel' ? 'cancelled' : null; if (!status) throw new Error('إجراء غير صالح'); await updateJob(jobId, { status, error: null }); await activity({ ...job, status }, action, action === 'pause' ? 'تم إيقاف العملية مؤقتاً' : action === 'resume' ? 'تم استكمال العملية' : 'تم إيقاف العملية نهائياً'); return this.getJob(userId, jobId); },
   async _saveMember(job, accountId, group, member) {
     const phone = normalizePhone(member.phone); if (!phone) return { ignored: true };
+    const sourceExists = await SystemDB.get(`SELECT s.id FROM group_number_sources s JOIN group_numbers n ON n.id=s.number_id WHERE s.user_id=$1 AND n.normalized_phone=$2 AND s.account_id=$3 AND s.group_jid=$4`, [job.user_id, phone, accountId, group.id]);
+    if (sourceExists) return { duplicate: true, alreadyProcessed: true };
     const c = classify(phone); const existing = await SystemDB.get(`INSERT INTO group_numbers(user_id,normalized_phone,country_code,country_name,is_saudi,contact_name,is_admin,appearance_count,source_count) VALUES($1,$2,$3,$4,$5,$6,$7,1,1) ON CONFLICT(user_id,normalized_phone) DO UPDATE SET last_seen_at=NOW(),appearance_count=group_numbers.appearance_count+1,source_count=group_numbers.source_count+1,is_admin=group_numbers.is_admin OR EXCLUDED.is_admin,contact_name=COALESCE(group_numbers.contact_name,EXCLUDED.contact_name),updated_at=NOW() RETURNING *`, [job.user_id, phone, c.country_code, c.country_name, c.is_saudi, member.name || null, !!member.is_admin]);
     await SystemDB.run(`INSERT INTO group_number_sources(number_id,user_id,account_id,group_jid,group_name,is_admin) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(number_id,account_id,group_jid) DO UPDATE SET last_seen_at=NOW(),is_admin=group_number_sources.is_admin OR EXCLUDED.is_admin`, [existing.id, job.user_id, accountId, group.id, group.subject || group.name || null, !!member.is_admin]);
     return { number: existing, new: Number(existing.appearance_count) === 1, saudi: c.is_saudi, admin: !!member.is_admin };
@@ -91,19 +98,22 @@ const GroupNumberService = {
   async _runJob(job) {
     const ids = Array.isArray(job.account_ids) ? job.account_ids : JSON.parse(job.account_ids || '[]');
     await updateJob(job.id, { status: 'running', started_at: job.started_at || new Date(), error: null });
-    let groupsTotal = 0, groupsScanned = Number(job.groups_scanned || 0), raw = Number(job.raw_members || 0), dups = Number(job.duplicate_numbers || 0), saudi = Number(job.saudi_numbers || 0), admins = Number(job.admin_numbers || 0), errors = Number(job.errors_count || 0);
+    const discoverTotal = !Number(job.groups_total || 0);
+    let groupsTotal = Number(job.groups_total || 0), groupsScanned = Number(job.groups_scanned || 0), raw = Number(job.raw_members || 0), dups = Number(job.duplicate_numbers || 0), saudi = Number(job.saudi_numbers || 0), admins = Number(job.admin_numbers || 0), errors = Number(job.errors_count || 0);
     for (const accountId of ids) {
       if (!(await this.getJob(job.user_id, job.id))?.status || (await this.getJob(job.user_id, job.id)).status === 'cancelled') return;
       let groups;
       try { groups = await WhatsAppManager.getGroups(accountId); } catch (e) { errors++; await activity({ ...job, current_account_id: accountId }, 'error', `تعذر جلب مجموعات الحساب: ${e.message}`); continue; }
-      groupsTotal += groups.length; await updateJob(job.id, { current_account_id: accountId, groups_total: groupsTotal });
+      if (discoverTotal) groupsTotal += groups.length; await updateJob(job.id, { current_account_id: accountId, groups_total: groupsTotal });
       for (const group of groups) {
         const latest = await this.getJob(job.user_id, job.id); if (!latest || latest.status === 'cancelled') return; if (latest.status === 'paused') return;
         const groupJid = group.id || group.jid; await updateJob(job.id, { current_account_id: accountId, current_group_jid: groupJid });
         try {
+          const alreadyScanned = await SystemDB.get(`SELECT id FROM group_number_activity WHERE job_id=$1 AND account_id=$2 AND group_jid=$3 AND event_type='group_scanned' LIMIT 1`, [job.id, accountId, groupJid]);
+          if (alreadyScanned) { continue; }
           const members = await WhatsAppManager.getGroupMembers(accountId, groupJid); const list = members?.all || [];
           raw += list.length; let added = 0;
-          for (const m of list) { const result = await this._saveMember(job, accountId, group, m); if (result.ignored) continue; if (result.new) added++; else dups++; if (result.saudi) saudi++; if (result.admin) admins++; }
+          for (const m of list) { const result = await this._saveMember(job, accountId, group, m); if (result.ignored) continue; if (result.new) added++; else if (!result.alreadyProcessed) dups++; if (result.saudi) saudi++; if (result.admin) admins++; }
           groupsScanned++; await activity({ ...job, current_account_id: accountId, current_group_jid: groupJid }, 'group_scanned', `تم فحص المجموعة ${group.subject || group.name || groupJid}`, { members: list.length, new_numbers: added, saudi, admins });
         } catch (e) { errors++; await activity({ ...job, current_account_id: accountId, current_group_jid: groupJid }, 'error', `تعذر فحص المجموعة ${group.subject || groupJid}: ${e.message}`); }
         const current = await this.stats(job.user_id); await updateJob(job.id, { groups_scanned: groupsScanned, raw_members: raw, duplicate_numbers: dups, saudi_numbers: current.saudi, admin_numbers: current.admins, unique_numbers: current.total, errors_count: errors }); await emit('group_numbers:update', { userId: job.user_id, jobId: job.id, status: 'running', groups_total: groupsTotal, groups_scanned: groupsScanned, unique_numbers: current.total, saudi_numbers: current.saudi, admin_numbers: current.admins, errors_count: errors });
