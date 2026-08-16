@@ -517,6 +517,28 @@ router.get('/group-numbers/countries', auth, GroupNumberController.countries.bin
 router.get('/group-numbers/export.csv', auth, GroupNumberController.exportCsv.bind(GroupNumberController));
 
 // ══════════════════════════════════════════════════════
+//  AI AUTOMATION CENTER
+// ══════════════════════════════════════════════════════
+const AIAutomationController = require('./controllers/AIAutomationController');
+router.get('/ai-center/dashboard', auth, AIAutomationController.dashboard.bind(AIAutomationController));
+router.get('/ai-center/tools', auth, AIAutomationController.tools.bind(AIAutomationController));
+router.get('/ai-center/agents', auth, AIAutomationController.agents.bind(AIAutomationController));
+router.post('/ai-center/agents', auth, AIAutomationController.createAgent.bind(AIAutomationController));
+router.patch('/ai-center/agents/:id', auth, AIAutomationController.toggleAgent.bind(AIAutomationController));
+router.get('/ai-center/workflows', auth, AIAutomationController.workflows.bind(AIAutomationController));
+router.post('/ai-center/workflows', auth, AIAutomationController.createWorkflow.bind(AIAutomationController));
+router.patch('/ai-center/workflows/:id', auth, AIAutomationController.updateWorkflow.bind(AIAutomationController));
+router.patch('/ai-center/workflows/:id/status', auth, AIAutomationController.toggleWorkflow.bind(AIAutomationController));
+router.get('/ai-center/tasks', auth, AIAutomationController.tasks.bind(AIAutomationController));
+router.post('/ai-center/tasks', auth, AIAutomationController.createTask.bind(AIAutomationController));
+router.patch('/ai-center/tasks/:id', auth, AIAutomationController.controlTask.bind(AIAutomationController));
+router.get('/ai-center/approvals', auth, AIAutomationController.approvals.bind(AIAutomationController));
+router.patch('/ai-center/approvals/:id', auth, AIAutomationController.decideApproval.bind(AIAutomationController));
+router.get('/ai-center/alerts', auth, AIAutomationController.alerts.bind(AIAutomationController));
+router.patch('/ai-center/alerts/:id/resolve', auth, AIAutomationController.resolveAlert.bind(AIAutomationController));
+router.post('/ai-center/events', auth, AIAutomationController.event.bind(AIAutomationController));
+
+// ══════════════════════════════════════════════════════
 //  TELEGRAM SYSTEM
 // ══════════════════════════════════════════════════════
 const TelegramController = require("./controllers/TelegramController");

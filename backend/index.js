@@ -342,6 +342,10 @@ async function bootstrap() {
         const GroupNumberService = require('./src/api/services/GroupNumberService');
         await GroupNumberService.startWorker();
         logger.info('[GroupNumberWorker] Durable group-number collection worker started.');
+        const AIAutomationService = require('./src/api/services/AIAutomationService');
+        await AIAutomationService.registerCoreEvents();
+        await AIAutomationService.startWorker();
+        logger.info('[AIWorker] AI automation worker and event bus started.');
         await LinkImportService.startWorker();
         logger.info('[LinkImportWorker] Persistent link import worker started.');
         const AutoSearchService = require('./src/api/services/AutoSearchService');
@@ -384,6 +388,7 @@ function setupGracefulShutdown() {
             LinkImportService.stopWorker();
             try { require('./src/api/services/KeywordMonitoringService').stopWorker(); } catch {}
             try { require('./src/api/services/GroupNumberService').stopWorker(); } catch {}
+            try { require('./src/api/services/AIAutomationService').stopWorker(); } catch {}
             try { require('./src/api/services/AutoSearchService').stopWorker(); } catch {}
             await QueueManager.stop();
             require('./src/api/services/GroupSyncService').stop();

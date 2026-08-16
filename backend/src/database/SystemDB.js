@@ -371,6 +371,74 @@ const SystemDB = {
         `);
         await p.query(`CREATE INDEX IF NOT EXISTS idx_group_number_activity_job ON group_number_activity(job_id, created_at DESC)`).catch(() => {});
 
+        await p.query(`
+            CREATE TABLE IF NOT EXISTS ai_agents (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL,
+                name TEXT NOT NULL, description TEXT, goal TEXT, instructions TEXT,
+                model TEXT, autonomy VARCHAR(20) NOT NULL DEFAULT 'supervised',
+                tools JSONB NOT NULL DEFAULT '[]', memory JSONB NOT NULL DEFAULT '{}',
+                guardrails JSONB NOT NULL DEFAULT '{}', max_steps INT NOT NULL DEFAULT 10,
+                timeout_seconds INT NOT NULL DEFAULT 120, retry_limit INT NOT NULL DEFAULT 2,
+                status VARCHAR(20) NOT NULL DEFAULT 'paused', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        `);
+        await p.query(`CREATE INDEX IF NOT EXISTS idx_ai_agents_user ON ai_agents(user_id,status)`).catch(() => {});
+        await p.query(`
+            CREATE TABLE IF NOT EXISTS ai_workflows (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL,
+                name TEXT NOT NULL, description TEXT, trigger_type TEXT NOT NULL DEFAULT 'manual',
+                nodes JSONB NOT NULL DEFAULT '[]', version INT NOT NULL DEFAULT 1,
+                status VARCHAR(20) NOT NULL DEFAULT 'draft', retry_limit INT NOT NULL DEFAULT 2,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        `);
+        await p.query(`CREATE INDEX IF NOT EXISTS idx_ai_workflows_user ON ai_workflows(user_id,status)`).catch(() => {});
+        await p.query(`
+            CREATE TABLE IF NOT EXISTS ai_tasks (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL,
+                workflow_id UUID REFERENCES ai_workflows(id) ON DELETE SET NULL, agent_id UUID REFERENCES ai_agents(id) ON DELETE SET NULL,
+                name TEXT NOT NULL, task_type TEXT NOT NULL DEFAULT 'manual', payload JSONB NOT NULL DEFAULT '{}',
+                status VARCHAR(20) NOT NULL DEFAULT 'queued', priority INT NOT NULL DEFAULT 5,
+                risk_score INT NOT NULL DEFAULT 0, confidence NUMERIC(5,4), retry_count INT NOT NULL DEFAULT 0,
+                result JSONB, error_code TEXT, error_message TEXT, started_at TIMESTAMPTZ, finished_at TIMESTAMPTZ,
+                idempotency_key TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE(user_id,idempotency_key)
+            )
+        `);
+        await p.query(`CREATE INDEX IF NOT EXISTS idx_ai_tasks_user_status ON ai_tasks(user_id,status,created_at DESC)`).catch(() => {});
+        await p.query(`
+            CREATE TABLE IF NOT EXISTS ai_approvals (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL,
+                task_id UUID NOT NULL REFERENCES ai_tasks(id) ON DELETE CASCADE, reason TEXT NOT NULL,
+                proposed_action TEXT, risk_score INT NOT NULL, confidence NUMERIC(5,4), status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                decision_by UUID, decision_note TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), decided_at TIMESTAMPTZ
+            )
+        `);
+        await p.query(`CREATE INDEX IF NOT EXISTS idx_ai_approvals_user ON ai_approvals(user_id,status,created_at DESC)`).catch(() => {});
+        await p.query(`
+            CREATE TABLE IF NOT EXISTS ai_alerts (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL,
+                severity VARCHAR(20) NOT NULL, source TEXT NOT NULL, description TEXT NOT NULL,
+                status VARCHAR(20) NOT NULL DEFAULT 'open', resolution TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), resolved_at TIMESTAMPTZ
+            )
+        `);
+        await p.query(`CREATE INDEX IF NOT EXISTS idx_ai_alerts_user ON ai_alerts(user_id,status,created_at DESC)`).catch(() => {});
+        await p.query(`
+            CREATE TABLE IF NOT EXISTS ai_events (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID, event_type TEXT NOT NULL,
+                payload JSONB NOT NULL DEFAULT '{}', idempotency_key TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE(event_type,idempotency_key)
+            )
+        `);
+        await p.query(`CREATE INDEX IF NOT EXISTS idx_ai_events_user ON ai_events(user_id,created_at DESC)`).catch(() => {});
+        await p.query(`
+            CREATE TABLE IF NOT EXISTS ai_audit_log (
+                id BIGSERIAL PRIMARY KEY, user_id UUID, task_id UUID, workflow_id UUID, agent_id UUID,
+                action TEXT NOT NULL, details JSONB NOT NULL DEFAULT '{}', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        `);
+        await p.query(`CREATE INDEX IF NOT EXISTS idx_ai_audit_user ON ai_audit_log(user_id,created_at DESC)`).catch(() => {});
+
         // Safe upgrades for installations created by the legacy schema.
         await p.query(`ALTER TABLE kw_keywords ADD COLUMN IF NOT EXISTS match_type VARCHAR(30) DEFAULT 'contains'`).catch(() => {});
         await p.query(`ALTER TABLE kw_keywords ADD COLUMN IF NOT EXISTS description TEXT`).catch(() => {});
