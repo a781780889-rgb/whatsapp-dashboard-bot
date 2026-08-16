@@ -19,6 +19,7 @@ const GroupsView                = lazy(() => import('./views/GroupsView'));
 const LinkDashboardView         = lazy(() => import('./views/LinkDashboardView'));
 const LinkJoinView              = lazy(() => import('./views/LinkJoinView'));
 const LinkImportView             = lazy(() => import('./views/LinkImportView'));
+const AutoSearchView              = lazy(() => import('./views/AutoSearchView'));
 const ScheduleDashboardView     = lazy(() => import('./views/ScheduleDashboardView'));
 const AdLibraryView             = lazy(() => import('./views/AdLibraryView'));
 const AIAutomationView          = lazy(() => import('./views/AIAutomationView'));
@@ -222,6 +223,7 @@ function AppInner() {
           <Route path="/links"          element={<LinkDashboardView    accountId={selectedAccountId} />} />
           <Route path="/link-join"      element={<LinkJoinView          accountId={selectedAccountId} accounts={accounts} />} />
           <Route path="/link-import"    element={<LinkImportView        accountId={selectedAccountId} accounts={accounts} />} />
+          <Route path="/auto-search"    element={<AutoSearchView         accountId={selectedAccountId} accounts={accounts} />} />
           <Route path="/schedules"      element={<ScheduleDashboardView accountId={selectedAccountId} accounts={accounts} />} />
           <Route path="/ad-library"     element={<AdLibraryView        accountId={selectedAccountId} />} />
           <Route path="/ai-automation" element={<AIAutomationView />} />

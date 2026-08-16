@@ -246,6 +246,7 @@ router.put('/accounts/:accountId/links/join-settings', auth, LinkScanController.
 //  LINK JOIN SYSTEM — نظام الانضمام بالروابط (متعدد الحسابات)
 // ══════════════════════════════════════════════════════
 const LinkImportController = require('./controllers/LinkImportController');
+const AutoSearchController = require('./controllers/AutoSearchController');
 router.post('/links/import/files', auth, LinkImportController.import.bind(LinkImportController));
 router.get('/links/import/files', auth, LinkImportController.files.bind(LinkImportController));
 router.get('/links/import/files/:fileId', auth, LinkImportController.file.bind(LinkImportController));
@@ -254,6 +255,16 @@ router.post('/links/import/start', auth, LinkImportController.start.bind(LinkImp
 router.get('/links/import/jobs', auth, LinkImportController.jobs.bind(LinkImportController));
 router.get('/links/import/jobs/:jobId', auth, LinkImportController.job.bind(LinkImportController));
 router.post('/links/import/jobs/:jobId/:action', auth, LinkImportController.control.bind(LinkImportController));
+// Automatic link search
+router.get('/auto-search/dashboard', auth, AutoSearchController.dashboard.bind(AutoSearchController));
+router.get('/auto-search/accounts', auth, AutoSearchController.accounts.bind(AutoSearchController));
+router.post('/auto-search/start', auth, AutoSearchController.start.bind(AutoSearchController));
+router.post('/auto-search/scan-now', auth, AutoSearchController.scanNow.bind(AutoSearchController));
+router.post('/auto-search/:action', auth, AutoSearchController.control.bind(AutoSearchController));
+router.get('/auto-search/settings', auth, AutoSearchController.dashboard.bind(AutoSearchController));
+router.post('/auto-search/settings', auth, AutoSearchController.settings.bind(AutoSearchController));
+router.get('/auto-search/links', auth, AutoSearchController.links.bind(AutoSearchController));
+router.post('/auto-search/copy', auth, AutoSearchController.copy.bind(AutoSearchController));
 
 const LinkJoinController = require('./controllers/LinkJoinController');
 

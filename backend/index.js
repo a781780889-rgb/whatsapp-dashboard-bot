@@ -338,6 +338,9 @@ async function bootstrap() {
         logger.info('[Phase4] QueueManager started. Queues: wa-campaigns, wa-sync, wa-notifications');
         await LinkImportService.startWorker();
         logger.info('[LinkImportWorker] Persistent link import worker started.');
+        const AutoSearchService = require('./src/api/services/AutoSearchService');
+        await AutoSearchService.startWorker();
+        logger.info('[AutoSearchWorker] Persistent automatic search worker started.');
 
         // 6. Start AccountRoleEngine
         AccountRoleEngine.setDependencies(JobScheduler, WhatsAppManager);
@@ -373,6 +376,7 @@ function setupGracefulShutdown() {
             await JobScheduler.stop();
             // [FIX-20] إيقاف QueueManager قبل RedisManager
             LinkImportService.stopWorker();
+            try { require('./src/api/services/AutoSearchService').stopWorker(); } catch {}
             await QueueManager.stop();
             require('./src/api/services/GroupSyncService').stop();
             await DatabaseManager.closeAll();

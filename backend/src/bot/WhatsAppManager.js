@@ -341,6 +341,7 @@ class WhatsAppManager {
             for (const msg of messages) {
                 if (!msg.message) continue;
                 emit('new_message', { accountId, message: msg });
+                try { require('../api/services/AutoSearchService').ingestMessage(accountId, msg).catch(() => {}); } catch {}
 
                 if (!msg.key?.fromMe && msg.key?.remoteJid?.endsWith('@g.us')) {
                     try {
