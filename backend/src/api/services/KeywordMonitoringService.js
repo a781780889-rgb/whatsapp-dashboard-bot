@@ -156,7 +156,9 @@ const KeywordMonitoringService = {
         const acct = await SystemDB.get(`SELECT user_id FROM accounts WHERE id=$1`, [accountId]);
         if (!acct?.user_id) return null;
         const remote = msg.key?.remoteJid || ''; const isGroup = remote.endsWith('@g.us');
-        const settings = await this.getSettings(acct.user_id); if (!settings.monitoring_enabled || (isGroup && settings.scan_groups===false) || (!isGroup && settings.scan_private===false)) return null;
+        const settings = await this.getSettings(acct.user_id);
+        const scope = Array.isArray(settings.account_ids) ? settings.account_ids.map(String) : [];
+        if (settings.monitoring_enabled === false || (scope.length > 0 && !scope.includes(String(accountId))) || (isGroup && settings.scan_groups===false) || (!isGroup && settings.scan_private===false)) return null;
         const id = getMessageId(msg); const text = extractMessageText(msg); if (!text) return null;
         await SystemDB.run(`INSERT INTO kw_event_queue(user_id,account_id,message_id,payload) VALUES($1,$2,$3,$4) ON CONFLICT(account_id,message_id,event_type) DO NOTHING`, [acct.user_id,accountId,id,JSON.stringify(msg)]);
         await SystemDB.run(`INSERT INTO kw_service_health(account_id,user_id,status,last_event_at,updated_at) VALUES($1,$2,'connected',NOW(),NOW()) ON CONFLICT(account_id) DO UPDATE SET user_id=$2,last_event_at=NOW(),updated_at=NOW()`,[accountId,acct.user_id]);
@@ -201,7 +203,16 @@ const KeywordMonitoringService = {
 
     async getNotifications(userId, options={}) { const limit=Math.min(100,Number(options.limit)||50); return SystemDB.all(`SELECT n.*,a.matched_keyword,a.message_text,a.sender_phone FROM kw_notifications n LEFT JOIN kw_alerts a ON a.id=n.alert_id WHERE n.user_id=$1 ORDER BY n.created_at DESC LIMIT $2`,[userId,limit]); },
     async markNotificationRead(userId,id) { const row = await SystemDB.get(`UPDATE kw_notifications SET is_read=TRUE,read_at=NOW() WHERE id=$1 AND user_id=$2 RETURNING *`,[id,userId]); if (!row) throw new Error('الإشعار غير موجود'); return row; },
-    async getHealth(userId) { return SystemDB.all(`SELECT a.id account_id,a.user_id,a.name account_name,a.phone_number account_phone,a.status account_status,COALESCE(h.status,CASE WHEN a.status='connected' THEN 'connected' ELSE 'disconnected' END) status,h.last_heartbeat,h.last_event_at,h.last_error,COALESCE(h.updated_at,a.updated_at) updated_at FROM accounts a LEFT JOIN kw_service_health h ON h.account_id=a.id WHERE a.user_id=$1 ORDER BY a.name`,[userId]); },
+    async getHealth(userId) { return SystemDB.all(`SELECT a.id account_id,a.user_id,a.name account_name,a.phone_number account_phone,a.status account_status,a.health_status,COALESCE(h.status,CASE WHEN a.status='connected' THEN 'connected' ELSE 'disconnected' END) status,h.last_heartbeat,h.last_event_at,h.last_error,COALESCE(h.updated_at,a.updated_at) updated_at FROM accounts a LEFT JOIN kw_service_health h ON h.account_id=a.id WHERE a.user_id=$1 ORDER BY a.name`,[userId]); },
+    async getAccountOverview(userId) {
+        const [settings, accounts] = await Promise.all([this.getSettings(userId), this.getHealth(userId)]);
+        const scope = Array.isArray(settings.account_ids) ? settings.account_ids.map(String) : [];
+        return {
+            monitoring_enabled: settings.monitoring_enabled !== false,
+            all_accounts_enabled: scope.length === 0,
+            accounts: accounts.map(account => ({ ...account, included: scope.length === 0 || scope.includes(String(account.account_id)), connected: account.account_status === 'connected' && account.status === 'connected' })),
+        };
+    },
 
     async sendReply(userId,alertId,body) {
         if(!String(body||'').trim()) throw new Error('نص الرد مطلوب');

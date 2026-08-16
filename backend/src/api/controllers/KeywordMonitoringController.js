@@ -163,6 +163,10 @@ const KWController = {
         try { res.json({ success: true, health: await KeywordMonitoringService.getHealth(req.user.id) }); }
         catch (err) { res.status(500).json({ success: false, error: err.message }); }
     },
+    async getAccounts(req, res) {
+        try { res.json({ success: true, ...await KeywordMonitoringService.getAccountOverview(req.user.id) }); }
+        catch (err) { res.status(500).json({ success: false, error: err.message }); }
+    },
     async setFlag(req, res) {
         try { res.json({ success: true, alert: await KeywordMonitoringService.setAlertFlag(req.user.id, req.params.id, req.body.field, req.body.value) }); }
         catch (err) { res.status(400).json({ success: false, error: err.message }); }

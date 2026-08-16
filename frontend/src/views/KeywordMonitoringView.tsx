@@ -8,7 +8,7 @@ import {
   Users, Hash, Star, Zap, ChevronLeft, ChevronRight,
   X, Save, StickyNote, History, ToggleLeft, ToggleRight,
   TrendingUp, Volume2, VolumeX, ArrowUpRight, Shield,
-  MessageCircle, AtSign, Calendar, Flame
+  MessageCircle, AtSign, Calendar, Flame, Power, Wifi, WifiOff
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -432,6 +432,7 @@ export default function KeywordMonitoringView({ userId }: { userId: string }) {
   const [newCount, setNewCount]   = useState(0);
   const [notifications, setNotifications] = useState<any[]>([]);
   const [health, setHealth] = useState<any[]>([]);
+  const [accountOverview, setAccountOverview] = useState<{ monitoring_enabled: boolean; all_accounts_enabled: boolean; accounts: any[] }>({ monitoring_enabled: true, all_accounts_enabled: true, accounts: [] });
   const [replyAlert, setReplyAlert] = useState<KeywordAlert | null>(null);
   const [replyBody, setReplyBody] = useState('');
   const [replySending, setReplySending] = useState(false);
@@ -506,6 +507,10 @@ export default function KeywordMonitoringView({ userId }: { userId: string }) {
     try { const r = await authFetch(`${API}/keywords/health`); const d = await r.json(); if (d.success) setHealth(d.health || []); } catch {}
   }, []);
 
+  const fetchAccountOverview = useCallback(async () => {
+    try { const r = await authFetch(`${API}/keywords/accounts`); const d = await r.json(); if (d.success) { setAccountOverview({ monitoring_enabled: d.monitoring_enabled !== false, all_accounts_enabled: d.all_accounts_enabled !== false, accounts: d.accounts || [] }); setHealth(d.accounts || []); } } catch {}
+  }, []);
+
   const fetchLog = useCallback(async () => {
     try {
       const r = await authFetch(`${API}/keywords/activity-log`);
@@ -514,8 +519,8 @@ export default function KeywordMonitoringView({ userId }: { userId: string }) {
     } catch {}
   }, []);
 
-  useEffect(() => { fetchKeywords(); fetchSettings(); fetchNotifications(); fetchHealth(); }, []);
-  useEffect(() => { const timer = window.setInterval(() => { fetchNotifications(); fetchHealth(); }, 10000); return () => window.clearInterval(timer); }, [fetchNotifications, fetchHealth]);
+  useEffect(() => { fetchKeywords(); fetchSettings(); fetchNotifications(); fetchAccountOverview(); }, [fetchKeywords, fetchSettings, fetchNotifications, fetchAccountOverview]);
+  useEffect(() => { const timer = window.setInterval(() => { fetchNotifications(); fetchAccountOverview(); }, 10000); return () => window.clearInterval(timer); }, [fetchNotifications, fetchAccountOverview]);
   useEffect(() => { if (tab === 'monitor') fetchAlerts(1); }, [tab, filter]);
   useEffect(() => { if (tab === 'stats')   fetchStats(); }, [tab]);
   useEffect(() => { if (tab === 'log')     fetchLog(); }, [tab]);
@@ -541,6 +546,21 @@ export default function KeywordMonitoringView({ userId }: { userId: string }) {
     socket.on('keyword_notification', onNotification);
     return () => { socket.off('keyword_alert', onAlert); socket.off('keyword_notification', onNotification); socket.disconnect(); };
   }, [userId, settings.sound_enabled, addToast]);
+
+  // ── Keyword actions ──────────────────────────────────────────────────────
+  async function toggleMonitoring() {
+    const next = !settings.monitoring_enabled;
+    const nextSettings = { ...settings, monitoring_enabled: next, account_ids: [] };
+    try {
+      const r = await authFetch(`${API}/keywords/settings`, { method: 'POST', body: JSON.stringify(nextSettings) });
+      const d = await r.json();
+      if (!d.success) throw new Error(d.error || 'تعذر تحديث الحالة');
+      setSettings(d.settings);
+      setAccountOverview(prev => ({ ...prev, monitoring_enabled: next, all_accounts_enabled: true }));
+      addToast({ title: next ? 'تم تشغيل نظام الكلمات المفتاحية لكل الحسابات' : 'تم إيقاف نظام الكلمات المفتاحية', type: next ? 'success' : 'warning' });
+      fetchAccountOverview();
+    } catch (e: any) { addToast({ title: e.message || 'تعذر تحديث حالة النظام', type: 'error' }); }
+  }
 
   // ── Keyword actions ──────────────────────────────────────────────────────
   async function saveKeyword(data: any) {
@@ -675,10 +695,13 @@ export default function KeywordMonitoringView({ userId }: { userId: string }) {
           </div>
 
           <div className="flex items-center gap-2">
-            <button onClick={() => { fetchAlerts(alertPage); fetchStats(); }}
-              className="p-2 rounded-xl hover:bg-[var(--bg-elevated)] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors">
+            <button onClick={() => { fetchAlerts(alertPage); fetchStats(); fetchAccountOverview(); }}
+              className="p-2 rounded-xl hover:bg-[var(--bg-elevated)] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors" title="تحديث حالة الحسابات">
               <RefreshCw className="w-4 h-4" />
             </button>
+            <Button onClick={toggleMonitoring} variant={settings.monitoring_enabled ? 'outline' : 'default'} className={cn('gap-2 rounded-xl', settings.monitoring_enabled ? 'border-red-500/40 text-red-400 hover:bg-red-500/10' : 'bg-emerald-600 hover:bg-emerald-500')}>
+              <Power className="w-4 h-4" />{settings.monitoring_enabled ? 'إيقاف النظام' : 'تشغيل النظام'}
+            </Button>
             <div className={cn('w-2 h-2 rounded-full', settings.monitoring_enabled ? 'bg-emerald-400 animate-pulse' : 'bg-slate-400')} />
             <span className="text-xs text-[var(--text-muted)]">
               {settings.monitoring_enabled ? 'مفعّل' : 'موقوف'}
@@ -713,6 +736,25 @@ export default function KeywordMonitoringView({ userId }: { userId: string }) {
         {/* ── Monitor Tab ── */}
         {tab === 'monitor' && (
           <div className="space-y-4">
+            {/* Account activation and real connection details */}
+            <Card className="bg-[var(--bg-surface)] border-[var(--border-default)]">
+              <CardContent className="p-4 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h2 className="font-bold flex items-center gap-2"><Users className="w-4 h-4 text-emerald-400" /> الحسابات المرتبطة بالنظام</h2>
+                    <p className="text-xs text-[var(--text-muted)] mt-1">جميع الحسابات مفعّلة تلقائياً للمراقبة عند تشغيل النظام.</p>
+                  </div>
+                  <Badge variant={accountOverview.all_accounts_enabled ? 'success' : 'warning'}>{accountOverview.all_accounts_enabled ? 'كل الحسابات مفعّلة' : 'نطاق مخصص'}</Badge>
+                </div>
+                {accountOverview.accounts.length === 0 ? <p className="text-sm text-[var(--text-muted)] py-3">لا توجد حسابات واتساب مرتبطة حتى الآن.</p> : <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">{accountOverview.accounts.map((account: any) => {
+                  const connected = account.connected;
+                  return <div key={account.account_id} className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-elevated)] p-3">
+                    <div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="font-semibold truncate">{account.account_name || 'حساب واتساب'}</p><p className="text-xs text-[var(--text-muted)] font-mono mt-1" dir="ltr">{account.account_phone || 'بدون رقم'}</p></div><span className={cn('inline-flex items-center gap-1 text-xs font-semibold', connected ? 'text-emerald-400' : 'text-amber-400')}><span className={cn('w-2 h-2 rounded-full', connected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400')} />{connected ? 'متصل ويعمل' : account.account_status === 'connecting' ? 'جارٍ الاتصال' : 'غير متصل'}</span></div>
+                    <div className="mt-3 flex items-center justify-between text-[11px] text-[var(--text-muted)]"><span className="flex items-center gap-1">{connected ? <Wifi className="w-3.5 h-3.5 text-emerald-400" /> : <WifiOff className="w-3.5 h-3.5" />} {account.included ? 'مفعّل للمراقبة' : 'غير مفعّل'}</span><span>آخر نشاط: {account.last_event_at ? timeAgo(account.last_event_at) : '—'}</span></div>
+                  </div>;
+                })}</div>}
+              </CardContent>
+            </Card>
             {/* Quick Stats Row */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
               {[

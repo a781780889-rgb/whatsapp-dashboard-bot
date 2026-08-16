@@ -493,6 +493,7 @@ router.get   ('/keywords/activity-log', auth, KWController.getActivityLog.bind(K
 router.get   ('/keywords/notifications', auth, KWController.getNotifications.bind(KWController));
 router.patch ('/keywords/notifications/:id/read', auth, KWController.markNotificationRead.bind(KWController));
 router.get   ('/keywords/health', auth, KWController.getHealth.bind(KWController));
+router.get   ('/keywords/accounts', auth, KWController.getAccounts.bind(KWController));
 router.patch ('/keyword-alerts/:id/flag', auth, KWController.setFlag.bind(KWController));
 router.post  ('/keyword-alerts/:id/reply', auth, KWController.sendReply.bind(KWController));
 
