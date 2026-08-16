@@ -22,6 +22,8 @@ ENV NODE_ENV=production
 # binary matches the build architecture and it has to compile from source.
 RUN apt-get update && apt-get install -y \
     python3 make g++ pkg-config libvips-dev \
+    tesseract-ocr tesseract-ocr-ara tesseract-ocr-eng \
+    zbar-tools poppler-utils antiword \
     --no-install-recommends && \
     rm -rf /var/lib/apt/lists/*
 
