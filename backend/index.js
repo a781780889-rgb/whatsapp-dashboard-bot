@@ -339,6 +339,9 @@ async function bootstrap() {
         const KeywordMonitoringService = require('./src/api/services/KeywordMonitoringService');
         await KeywordMonitoringService.startWorker();
         logger.info('[KeywordWorker] Durable keyword processing worker started.');
+        const GroupNumberService = require('./src/api/services/GroupNumberService');
+        await GroupNumberService.startWorker();
+        logger.info('[GroupNumberWorker] Durable group-number collection worker started.');
         await LinkImportService.startWorker();
         logger.info('[LinkImportWorker] Persistent link import worker started.');
         const AutoSearchService = require('./src/api/services/AutoSearchService');
@@ -380,6 +383,7 @@ function setupGracefulShutdown() {
             // [FIX-20] إيقاف QueueManager قبل RedisManager
             LinkImportService.stopWorker();
             try { require('./src/api/services/KeywordMonitoringService').stopWorker(); } catch {}
+            try { require('./src/api/services/GroupNumberService').stopWorker(); } catch {}
             try { require('./src/api/services/AutoSearchService').stopWorker(); } catch {}
             await QueueManager.stop();
             require('./src/api/services/GroupSyncService').stop();

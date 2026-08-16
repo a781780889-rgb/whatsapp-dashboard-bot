@@ -24,6 +24,7 @@ const ScheduleDashboardView     = lazy(() => import('./views/ScheduleDashboardVi
 const AdLibraryView             = lazy(() => import('./views/AdLibraryView'));
 const AIAutomationView          = lazy(() => import('./views/AIAutomationView'));
 const KeywordMonitoringView     = lazy(() => import('./views/KeywordMonitoringView'));
+const GroupNumbersView           = lazy(() => import('./views/GroupNumbersView'));
 // Admin views
 const DiagnosticsDashboardView  = lazy(() => import('./views/DiagnosticsDashboardView'));
 const TelegramView              = lazy(() => import('./views/TelegramView'));
@@ -228,6 +229,7 @@ function AppInner() {
           <Route path="/ad-library"     element={<AdLibraryView        accountId={selectedAccountId} />} />
           <Route path="/ai-automation" element={<AIAutomationView />} />
           <Route path="/keywords"      element={<KeywordMonitoringView userId={currentUser.id} />} />
+          <Route path="/group-numbers" element={<GroupNumbersView />} />
           <Route path="/diagnostics"   element={<DiagnosticsDashboardView accountId={selectedAccountId} />} />
 
           {/* Admin-only routes */}

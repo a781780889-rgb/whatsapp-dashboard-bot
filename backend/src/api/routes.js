@@ -498,6 +498,22 @@ router.patch ('/keyword-alerts/:id/flag', auth, KWController.setFlag.bind(KWCont
 router.post  ('/keyword-alerts/:id/reply', auth, KWController.sendReply.bind(KWController));
 
 // ══════════════════════════════════════════════════════
+//  GROUP NUMBERS
+// ══════════════════════════════════════════════════════
+const GroupNumberController = require('./controllers/GroupNumberController');
+router.get('/group-numbers/accounts', auth, GroupNumberController.accounts.bind(GroupNumberController));
+router.post('/group-numbers/jobs', auth, GroupNumberController.start.bind(GroupNumberController));
+router.get('/group-numbers/jobs', auth, GroupNumberController.jobs.bind(GroupNumberController));
+router.get('/group-numbers/jobs/latest', auth, GroupNumberController.latest.bind(GroupNumberController));
+router.get('/group-numbers/jobs/:id', auth, GroupNumberController.job.bind(GroupNumberController));
+router.get('/group-numbers/jobs/:id/activity', auth, GroupNumberController.activity.bind(GroupNumberController));
+router.patch('/group-numbers/jobs/:id', auth, GroupNumberController.control.bind(GroupNumberController));
+router.get('/group-numbers/numbers', auth, GroupNumberController.numbers.bind(GroupNumberController));
+router.get('/group-numbers/stats', auth, GroupNumberController.stats.bind(GroupNumberController));
+router.get('/group-numbers/countries', auth, GroupNumberController.countries.bind(GroupNumberController));
+router.get('/group-numbers/export.csv', auth, GroupNumberController.exportCsv.bind(GroupNumberController));
+
+// ══════════════════════════════════════════════════════
 //  TELEGRAM SYSTEM
 // ══════════════════════════════════════════════════════
 const TelegramController = require("./controllers/TelegramController");

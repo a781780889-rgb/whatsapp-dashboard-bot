@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Users, Library, Calendar,
   Megaphone, Link as LinkIcon, LogOut, ChevronRight,
   UsersRound, BarChart3, Crown, Brain, Activity,
-  GitMerge, MessageCircle, CreditCard, Monitor, SearchCheck, Upload, Search
+  GitMerge, MessageCircle, CreditCard, Monitor, SearchCheck, Upload, Search, ContactRound
 } from 'lucide-react';
 import { cn } from '@/utils/cn';
 
@@ -43,7 +43,8 @@ export function Sidebar({ isCollapsed, setIsCollapsed, currentUser, onLogout }: 
         { to: '/link-join',  icon: GitMerge,    label: 'الانضمام بالروابط'   },
         { to: '/link-import', icon: Upload,      label: 'نظام استيراد الروابط' },
         { to: '/auto-search', icon: Search,      label: 'البحث التلقائي' },
-        { to: '/keywords',   icon: SearchCheck,  label: 'الكلمات المفتاحية'   },
+        { to: '/keywords',      icon: SearchCheck,  label: 'الكلمات المفتاحية' },
+        { to: '/group-numbers', icon: ContactRound, label: 'أرقام المجموعات' },
       ]
     },
 
