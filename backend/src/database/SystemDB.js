@@ -438,7 +438,6 @@ const SystemDB = {
             )
         `);
         await p.query(`CREATE INDEX IF NOT EXISTS idx_ai_audit_user ON ai_audit_log(user_id,created_at DESC)`).catch(() => {});
-        await p.query(`CREATE TABLE IF NOT EXISTS ai_center_settings (user_id UUID PRIMARY KEY, enabled BOOLEAN NOT NULL DEFAULT TRUE, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`).catch(() => {});
 
         // Safe upgrades for installations created by the legacy schema.
         await p.query(`ALTER TABLE kw_keywords ADD COLUMN IF NOT EXISTS match_type VARCHAR(30) DEFAULT 'contains'`).catch(() => {});
