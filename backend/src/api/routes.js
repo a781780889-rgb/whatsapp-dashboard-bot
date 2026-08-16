@@ -542,6 +542,7 @@ router.post('/ai-center/events', auth, AIAutomationController.event.bind(AIAutom
 //  TELEGRAM SYSTEM
 // ══════════════════════════════════════════════════════
 const TelegramController = require("./controllers/TelegramController");
+const TelegramKeywordController = require("./controllers/TelegramKeywordController");
 
 // ── حسابات تيليجرام (تتطلب مصادقة) ────────────────
 // ⚠️ المسارات الثابتة أولاً (workers/stats) قبل /:id
@@ -553,7 +554,16 @@ router.get   ("/telegram/accounts/:id",                auth, TelegramController.
 router.put   ("/telegram/accounts/:id",                auth, TelegramController.updateAccount.bind(TelegramController));
 router.delete("/telegram/accounts/:id",                auth, TelegramController.deleteAccount.bind(TelegramController));
 router.post  ("/telegram/accounts/:id/start",          auth, TelegramController.startWorker.bind(TelegramController));
-router.post  ("/telegram/accounts/:id/stop",           auth, TelegramController.stopWorker.bind(TelegramController));
+router.post  ("/telegram/accounts/:id/stop",          auth, TelegramController.stopWorker.bind(TelegramController));
+
+// ── كلمات مفتاحية تيليجرام ───────────────────────────
+router.get   ("/telegram-keywords/dashboard",          auth, TelegramKeywordController.dashboard.bind(TelegramKeywordController));
+router.get   ("/telegram-keywords/accounts",           auth, TelegramKeywordController.accounts.bind(TelegramKeywordController));
+router.get   ("/telegram-keywords/workers",            auth, TelegramKeywordController.worker.bind(TelegramKeywordController));
+router.post  ("/telegram-keywords",                    auth, TelegramKeywordController.create.bind(TelegramKeywordController));
+router.put   ("/telegram-keywords/:id",                auth, TelegramKeywordController.update.bind(TelegramKeywordController));
+router.delete("/telegram-keywords/:id",                auth, TelegramKeywordController.remove.bind(TelegramKeywordController));
+router.post  ("/telegram-keywords/results/:id/reply",  auth, TelegramKeywordController.reply.bind(TelegramKeywordController));
 
 // ── روابط واتساب المكتشفة (تتطلب مصادقة) ───────────
 // ⚠️ المسارات الثابتة (export / bulk-delete) قبل /:id

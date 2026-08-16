@@ -63,6 +63,46 @@ const TelegramMigrations = {
                 )
             `);
 
+            // ── مركز كلمات تيليجرام ─────────────────────────────────────
+            await query(`
+                CREATE TABLE IF NOT EXISTS telegram_keywords (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL,
+                    keyword TEXT NOT NULL, match_mode VARCHAR(30) NOT NULL DEFAULT 'contains',
+                    case_sensitive BOOLEAN NOT NULL DEFAULT false, normalize_arabic BOOLEAN NOT NULL DEFAULT true,
+                    search_groups BOOLEAN NOT NULL DEFAULT true, search_channels BOOLEAN NOT NULL DEFAULT true,
+                    account_ids JSONB NOT NULL DEFAULT '[]', is_active BOOLEAN NOT NULL DEFAULT true,
+                    created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            `);
+            await query(`
+                CREATE TABLE IF NOT EXISTS telegram_keyword_results (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL,
+                    keyword_id UUID NOT NULL REFERENCES telegram_keywords(id) ON DELETE CASCADE,
+                    telegram_account_id UUID NOT NULL REFERENCES telegram_accounts(id) ON DELETE CASCADE,
+                    chat_id TEXT NOT NULL, message_id TEXT NOT NULL, sender_id TEXT,
+                    sender_username TEXT, sender_name TEXT, sender_phone TEXT, message_text TEXT NOT NULL,
+                    chat_title TEXT, chat_type VARCHAR(30), message_timestamp TIMESTAMPTZ,
+                    detected_at TIMESTAMPTZ DEFAULT NOW(), reply_status VARCHAR(30) DEFAULT 'available',
+                    replied_at TIMESTAMPTZ, reply_error TEXT, ignored BOOLEAN DEFAULT false,
+                    UNIQUE(telegram_account_id, chat_id, message_id, keyword_id)
+                )
+            `);
+            await query(`
+                CREATE TABLE IF NOT EXISTS telegram_keyword_events (
+                    id BIGSERIAL PRIMARY KEY, user_id UUID NOT NULL, telegram_account_id UUID,
+                    event_type VARCHAR(40) NOT NULL, result_id UUID, payload JSONB DEFAULT '{}',
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            `);
+            const keywordIndexes = [
+                `CREATE INDEX IF NOT EXISTS idx_tg_keywords_user_active ON telegram_keywords(user_id,is_active)`,
+                `CREATE INDEX IF NOT EXISTS idx_tg_results_user_detected ON telegram_keyword_results(user_id,detected_at DESC)`,
+                `CREATE INDEX IF NOT EXISTS idx_tg_results_account_chat ON telegram_keyword_results(telegram_account_id,chat_id,message_timestamp DESC)`,
+                `CREATE INDEX IF NOT EXISTS idx_tg_results_message ON telegram_keyword_results(message_id)`,
+                `CREATE INDEX IF NOT EXISTS idx_tg_events_user_created ON telegram_keyword_events(user_id,created_at DESC)`,
+            ];
+            for (const idx of keywordIndexes) await query(idx).catch(() => {});
+
             // ── Indexes للأداء ────────────────────────────────────────────
             const indexes = [
                 `CREATE INDEX IF NOT EXISTS idx_whatsapp_links_status ON whatsapp_links(status)`,

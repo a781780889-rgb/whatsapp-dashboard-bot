@@ -1,0 +1,86 @@
+'use strict';
+const { query, queryOne, queryAll } = require('../../lib/postgres');
+const SocketBridge = require('../../core/SocketBridge');
+const TelegramService = require('./TelegramService');
+const { v4: uuidv4 } = require('uuid');
+
+function normalizeText(value, arabic = true) {
+  let text = String(value || '').normalize('NFKC').trim();
+  if (!arabic) return text;
+  return text.replace(/[إأآٱ]/g, 'ا').replace(/ى/g, 'ي').replace(/ة/g, 'ه').replace(/[ًٌٍَُِّْـ]/g, '').replace(/\s+/g, ' ');
+}
+function matches(text, keyword) {
+  const source = keyword.case_sensitive ? String(text || '') : String(text || '').toLocaleLowerCase();
+  const term = keyword.case_sensitive ? String(keyword.keyword || '') : String(keyword.keyword || '').toLocaleLowerCase();
+  const a = keyword.normalize_arabic === false ? source : normalizeText(source, true);
+  const b = keyword.normalize_arabic === false ? term : normalizeText(term, true);
+  if (!b) return false;
+  if (keyword.match_mode === 'exact') return a === b;
+  if (keyword.match_mode === 'starts_with') return a.startsWith(b);
+  if (keyword.match_mode === 'ends_with') return a.endsWith(b);
+  if (keyword.match_mode === 'regex') { try { return new RegExp(b, keyword.case_sensitive ? '' : 'i').test(a); } catch { return false; } }
+  return a.includes(b);
+}
+function safeAccount(account) { if (!account) return null; const { session_string, api_hash, bot_token, ...safe } = account; return safe; }
+
+const Service = {
+  normalizeText, matches,
+  async accounts(userId) {
+    const rows = await queryAll(`SELECT id,name,phone_number,bot_username,status,last_activity_at,links_collected,channels_monitored,created_at,updated_at FROM telegram_accounts WHERE user_id=$1 ORDER BY created_at DESC`, [userId]);
+    return rows.map(a => ({ ...a, keyword_status: a.status === 'connected' ? 'active' : 'offline' }));
+  },
+  async dashboard(userId, filters = {}) {
+    const [accounts, keywords, stats] = await Promise.all([
+      this.accounts(userId),
+      queryAll(`SELECT * FROM telegram_keywords WHERE user_id=$1 ORDER BY created_at DESC`, [userId]),
+      queryOne(`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE detected_at >= NOW()-INTERVAL '24 hours')::int AS today, COUNT(*) FILTER (WHERE ignored=false)::int AS active FROM telegram_keyword_results WHERE user_id=$1`, [userId]),
+    ]);
+    const conditions = ['r.user_id=$1']; const params = [userId]; let n = 2;
+    if (filters.keyword_id) { conditions.push(`r.keyword_id=$${n++}`); params.push(filters.keyword_id); }
+    if (filters.account_id) { conditions.push(`r.telegram_account_id=$${n++}`); params.push(filters.account_id); }
+    if (filters.search) { conditions.push(`(r.message_text ILIKE $${n} OR r.sender_name ILIKE $${n} OR r.sender_username ILIKE $${n} OR r.chat_title ILIKE $${n})`); params.push(`%${filters.search}%`); n++; }
+    const limit = Math.min(Math.max(Number(filters.limit || 50), 1), 200); const offset = Math.max(Number(filters.offset || 0), 0);
+    params.push(limit, offset);
+    const results = await queryAll(`SELECT r.*,k.keyword,a.name AS account_name,a.phone_number AS account_phone FROM telegram_keyword_results r JOIN telegram_keywords k ON k.id=r.keyword_id JOIN telegram_accounts a ON a.id=r.telegram_account_id WHERE ${conditions.join(' AND ')} ORDER BY r.detected_at DESC LIMIT $${n++} OFFSET $${n}`, params);
+    return { accounts, keywords, results, stats: stats || { total: 0, today: 0, active: 0 } };
+  },
+  async createKeyword(userId, body) {
+    const keyword = String(body.keyword || '').trim(); if (!keyword) throw new Error('الكلمة المفتاحية مطلوبة');
+    const accountIds = [...new Set(Array.isArray(body.account_ids) ? body.account_ids : [])];
+    if (accountIds.length) { const owned = await queryOne(`SELECT COUNT(*)::int AS count FROM telegram_accounts WHERE user_id=$1 AND id=ANY($2::uuid[])`, [userId, accountIds]); if (Number(owned?.count || 0) !== accountIds.length) throw new Error('يوجد حساب غير مملوك للمستخدم'); }
+    const row = await queryOne(`INSERT INTO telegram_keywords(user_id,keyword,match_mode,case_sensitive,normalize_arabic,search_groups,search_channels,account_ids,is_active) VALUES($1,$2,$3,$4,$5,$6,$7,$8,true) RETURNING *`, [userId, keyword, body.match_mode || 'contains', Boolean(body.case_sensitive), body.normalize_arabic !== false, body.search_groups !== false, body.search_channels !== false, JSON.stringify(accountIds)]);
+    return row;
+  },
+  async updateKeyword(userId, id, body) {
+    const existing = await queryOne(`SELECT * FROM telegram_keywords WHERE id=$1 AND user_id=$2`, [id, userId]); if (!existing) throw new Error('الكلمة غير موجودة');
+    const accountIds = body.account_ids === undefined ? existing.account_ids : [...new Set(body.account_ids || [])];
+    if (accountIds.length) { const owned = await queryOne(`SELECT COUNT(*)::int AS count FROM telegram_accounts WHERE user_id=$1 AND id=ANY($2::uuid[])`, [userId, accountIds]); if (Number(owned?.count || 0) !== accountIds.length) throw new Error('يوجد حساب غير مملوك للمستخدم'); }
+    return queryOne(`UPDATE telegram_keywords SET keyword=$1,match_mode=$2,case_sensitive=$3,normalize_arabic=$4,search_groups=$5,search_channels=$6,account_ids=$7,is_active=$8,updated_at=NOW() WHERE id=$9 AND user_id=$10 RETURNING *`, [String(body.keyword ?? existing.keyword).trim(), body.match_mode || existing.match_mode, body.case_sensitive ?? existing.case_sensitive, body.normalize_arabic ?? existing.normalize_arabic, body.search_groups ?? existing.search_groups, body.search_channels ?? existing.search_channels, JSON.stringify(accountIds), body.is_active ?? existing.is_active, id, userId]);
+  },
+  async deleteKeyword(userId, id) { const r = await query(`DELETE FROM telegram_keywords WHERE id=$1 AND user_id=$2`, [id, userId]); if (!r.rowCount) throw new Error('الكلمة غير موجودة'); return true; },
+  async ingest(accountId, message) {
+    const account = await queryOne(`SELECT * FROM telegram_accounts WHERE id=$1`, [accountId]); if (!account || account.status !== 'connected') return { matched: 0 };
+    const text = String(message.text || message.message || '').trim(); if (!text) return { matched: 0 };
+    const keywords = await queryAll(`SELECT * FROM telegram_keywords WHERE user_id=$1 AND is_active=true AND (account_ids='[]'::jsonb OR account_ids ? $2)`, [account.user_id, String(accountId)]);
+    let matched = 0;
+    for (const keyword of keywords) {
+      const chatType = String(message.chat_type || (message.is_channel ? 'channel' : 'group'));
+      if (chatType === 'channel' && !keyword.search_channels) continue; if (chatType !== 'channel' && !keyword.search_groups) continue;
+      if (!matches(text, keyword)) continue;
+      const result = await queryOne(`INSERT INTO telegram_keyword_results(user_id,keyword_id,telegram_account_id,chat_id,message_id,sender_id,sender_username,sender_name,sender_phone,message_text,chat_title,chat_type,message_timestamp) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(telegram_account_id,chat_id,message_id,keyword_id) DO NOTHING RETURNING *`, [account.user_id, keyword.id, accountId, String(message.chat_id || message.chatId || ''), String(message.message_id || message.id || uuidv4()), message.sender_id || null, message.sender_username || null, message.sender_name || null, message.sender_phone || null, text, message.chat_title || message.chat_name || '', chatType, message.date ? new Date(message.date) : new Date()]);
+      if (!result) continue; matched++;
+      await query(`INSERT INTO telegram_keyword_events(user_id,telegram_account_id,event_type,result_id,payload) VALUES($1,$2,'matched',$3,$4)`, [account.user_id, accountId, result.id, JSON.stringify({ keyword: keyword.keyword, chat_id: result.chat_id })]).catch(() => {});
+      SocketBridge.to(`user:${account.user_id}`).emit('telegram:keyword:matched', { result, keyword: { id: keyword.id, keyword: keyword.keyword }, account: safeAccount(account) });
+    }
+    if (matched) await query(`UPDATE telegram_accounts SET last_activity_at=NOW(),updated_at=NOW() WHERE id=$1`, [accountId]).catch(() => {});
+    return { matched };
+  },
+  async reply(userId, resultId, text) {
+    const result = await queryOne(`SELECT r.*,a.name AS account_name FROM telegram_keyword_results r JOIN telegram_accounts a ON a.id=r.telegram_account_id WHERE r.id=$1 AND r.user_id=$2`, [resultId, userId]);
+    if (!result) throw new Error('نتيجة الاكتشاف غير موجودة'); if (!text || !String(text).trim()) throw new Error('نص الرد مطلوب');
+    const worker = TelegramService.getWorker?.(result.telegram_account_id); if (!worker?.client || worker.status !== 'running') throw new Error('الحساب المصدر غير متصل');
+    try { await worker.client.sendMessage(result.chat_id, { message: String(text).trim(), replyTo: Number(result.message_id) || undefined }); await query(`UPDATE telegram_keyword_results SET reply_status='sent',replied_at=NOW(),reply_error=NULL WHERE id=$1 AND user_id=$2`, [resultId, userId]); return { sent: true }; }
+    catch (err) { await query(`UPDATE telegram_keyword_results SET reply_status='failed',reply_error=$3 WHERE id=$1 AND user_id=$2`, [resultId, userId, err.message]); throw new Error('فشل إرسال الرد عبر الحساب المصدر'); }
+  },
+};
+module.exports = Service;

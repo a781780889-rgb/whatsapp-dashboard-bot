@@ -28,6 +28,7 @@ const GroupNumbersView           = lazy(() => import('./views/GroupNumbersView')
 // Admin views
 const DiagnosticsDashboardView  = lazy(() => import('./views/DiagnosticsDashboardView'));
 const TelegramView              = lazy(() => import('./views/TelegramView'));
+const TelegramKeywordView       = lazy(() => import('./views/TelegramKeywordView'));
 const AdminStatsView            = lazy(() => import('./views/AdminStatsView'));
 const SubscriptionsView         = lazy(() => import('./views/SubscriptionsView'));
 const SubscriberMonitoringView  = lazy(() => import('./views/SubscriberMonitoringView'));
@@ -246,6 +247,7 @@ function AppInner() {
               <SubscriberMonitoringView />
             </ProtectedRoute>} />
           <Route path="/telegram"        element={<TelegramView />} />
+          <Route path="/telegram-keywords" element={<TelegramKeywordView />} />
 
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

@@ -71,6 +71,7 @@ export function Sidebar({ isCollapsed, setIsCollapsed, currentUser, onLogout }: 
         { to: '/admin/subscriptions', icon: CreditCard,    label: 'الاشتراكات'   },
         { to: '/admin/subscriber-monitoring', icon: Monitor, label: 'مراقبة المشتركين' },
         { to: '/telegram',            icon: MessageCircle, label: 'تيليجرام'  },
+        { to: '/telegram-keywords',    icon: SearchCheck,    label: 'كلمات مفتاحية تيليجرام' },
       ]
     }
   ] : [];
@@ -80,6 +81,7 @@ export function Sidebar({ isCollapsed, setIsCollapsed, currentUser, onLogout }: 
       section: 'التيلجرام التفاعلي',
       items: [
         { to: '/telegram', icon: MessageCircle, label: 'تيليجرام' },
+        { to: '/telegram-keywords', icon: SearchCheck, label: 'كلمات مفتاحية تيليجرام' },
       ]
     }
   ] : [];
