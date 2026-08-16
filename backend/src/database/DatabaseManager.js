@@ -76,6 +76,8 @@ CREATE TABLE IF NOT EXISTS link_import_jobs (id UUID PRIMARY KEY, file_id UUID N
 CREATE INDEX IF NOT EXISTS idx_link_import_jobs_status ON link_import_jobs(status);
 CREATE TABLE IF NOT EXISTS link_import_account_state (job_id UUID NOT NULL REFERENCES link_import_jobs(id) ON DELETE CASCADE, account_id UUID NOT NULL, status VARCHAR(30) DEFAULT 'idle', current_item_id BIGINT, processed INT DEFAULT 0, successful INT DEFAULT 0, failed INT DEFAULT 0, skipped INT DEFAULT 0, last_attempt_at TIMESTAMPTZ, last_error TEXT, updated_at TIMESTAMPTZ DEFAULT NOW(), PRIMARY KEY(job_id,account_id));
 CREATE TABLE IF NOT EXISTS link_import_events (id BIGSERIAL PRIMARY KEY, job_id UUID NOT NULL REFERENCES link_import_jobs(id) ON DELETE CASCADE, account_id UUID, item_id BIGINT, event_type VARCHAR(40) NOT NULL, message TEXT, details JSONB DEFAULT '{}', created_at TIMESTAMPTZ DEFAULT NOW());
+CREATE TABLE IF NOT EXISTS link_import_join_history (id BIGSERIAL PRIMARY KEY, account_id UUID NOT NULL, invite_code TEXT NOT NULL, normalized_url TEXT NOT NULL, group_id TEXT, status VARCHAR(30) NOT NULL DEFAULT 'joined', first_joined_at TIMESTAMPTZ DEFAULT NOW(), last_seen_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(account_id,invite_code));
+CREATE INDEX IF NOT EXISTS idx_link_import_join_history_account ON link_import_join_history(account_id,status);
 `;
 
 const DatabaseManager = {
