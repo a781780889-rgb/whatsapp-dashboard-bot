@@ -4,4 +4,9 @@ const links = extractLinks('رابط https://chat.whatsapp.com/ABC_DEF_123456789
 assert.equal(links.length, 2);
 assert.equal(normalizeUrl(' http://chat.whatsapp.com/ABC_DEF_1234567890 '), 'https://chat.whatsapp.com/ABC_DEF_1234567890');
 assert.equal(extractLinks('https://example.com/not-an-invite').length, 0);
-console.log('auto-search helpers: ok');
+const fs = require('fs');
+const source = fs.readFileSync('./src/api/services/AutoSearchService.js','utf8');
+assert(source.includes('auto_search_processed_messages'));
+assert(source.includes('ON CONFLICT(job_id,account_id,message_id) DO NOTHING'));
+assert(source.includes('auto_search_link_sources_source_key_idx'));
+console.log('auto-search helpers/idempotency: ok');

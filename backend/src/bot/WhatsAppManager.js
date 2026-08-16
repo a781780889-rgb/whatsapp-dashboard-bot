@@ -192,6 +192,8 @@ class WhatsAppManager {
             connectTimeoutMs: 60000,
             defaultQueryTimeoutMs: 30000,
             keepAliveIntervalMs: 25000,
+            syncFullHistory: true,
+            shouldSyncHistoryMessage: () => true,
             logger: { level: 'silent', trace: () => {}, debug: () => {}, info: () => {}, warn: () => {}, error: () => {}, fatal: () => {}, child: () => ({ level: 'silent', trace: () => {}, debug: () => {}, info: () => {}, warn: () => {}, error: () => {}, fatal: () => {}, child: () => ({}) }) },
         });
 
@@ -341,7 +343,7 @@ class WhatsAppManager {
             for (const msg of messages) {
                 if (!msg.message) continue;
                 emit('new_message', { accountId, message: msg });
-                try { require('../api/services/AutoSearchService').ingestMessage(accountId, msg).catch(() => {}); } catch {}
+                try { require('../api/services/AutoSearchService').ingestMessage(accountId, msg).catch(err => console.warn(`[AutoSearch] live message ${accountId}/${msg.key?.id || 'unknown'} failed: ${err.message}`)); } catch (err) { console.warn(`[AutoSearch] live message listener failed for ${accountId}: ${err.message}`); }
 
                 // Keyword Center v2: persist the event immediately and let the
                 // independent worker analyze it. This is intentionally not gated
@@ -361,8 +363,8 @@ class WhatsAppManager {
 
         sock.ev.on('messaging-history.set', async (payload) => {
             try {
-                require('../api/services/AutoSearchService').ingestHistory(accountId, payload).catch(() => {});
-            } catch {}
+                require('../api/services/AutoSearchService').ingestHistory(accountId, payload).catch(err => console.warn(`[AutoSearch] history batch ${accountId} failed: ${err.message}`));
+            } catch (err) { console.warn(`[AutoSearch] history listener failed for ${accountId}: ${err.message}`); }
         });
 
         // [PRIVATE-SEND-ACK-TRACKING] هذا المستمع آمن بالتصميم لأنه لا يفعل
