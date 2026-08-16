@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const SystemDB = require('../../database/SystemDB');
 const SocketBridge = require('../../core/SocketBridge');
 
@@ -29,7 +30,9 @@ function jidPhone(jid = '') {
 }
 
 function getMessageId(msg) {
-    return msg?.key?.id || `${msg?.key?.remoteJid || 'unknown'}:${msg?.messageTimestamp || Date.now()}`;
+    if (msg?.key?.id) return String(msg.key.id);
+    const stable = [msg?.key?.remoteJid || '', msg?.key?.participant || '', msg?.messageTimestamp || '', extractMessageText(msg)].join('|');
+    return `derived:${crypto.createHash('sha256').update(stable).digest('hex').slice(0, 48)}`;
 }
 
 function matchesKeyword(keyword, text) {
@@ -46,16 +49,17 @@ function matchesKeyword(keyword, text) {
 }
 
 async function broadcast(event, payload) {
-    try { SocketBridge.emit(event, payload); } catch (_) {}
     try {
-        const { _io } = require('../../index');
-        if (_io) _io.emit(event, payload);
+        if (payload?.userId) SocketBridge.to(`user:${payload.userId}`).emit(event, payload);
+        else SocketBridge.emit(event, payload);
     } catch (_) {}
 }
 
 const KeywordMonitoringService = {
     normalizeText,
     extractMessageText,
+    _matchesKeyword: matchesKeyword,
+    _getMessageId: getMessageId,
 
     async getKeywords(userId) {
         return SystemDB.all(`SELECT * FROM kw_keywords WHERE user_id=$1 ORDER BY category, word`, [userId]);
@@ -122,18 +126,22 @@ const KeywordMonitoringService = {
     },
     async deleteAlert(userId, id) { const row = await SystemDB.get(`DELETE FROM kw_alerts WHERE id=$1 AND user_id=$2 RETURNING id`, [id,userId]); if (!row) throw new Error('التنبيه غير موجود'); return { success:true }; },
     async addAlertNote(userId,id,note) { return this.updateAlertStatus(userId,id,'reviewed',note); },
-    async setAlertFlag(userId,id,field,value) { if (!['is_pinned','is_archived'].includes(field)) throw new Error('حقل غير مسموح'); return SystemDB.get(`UPDATE kw_alerts SET ${field}=$1,updated_at=NOW() WHERE id=$2 AND user_id=$3 RETURNING *`,[!!value,id,userId]); },
+    async setAlertFlag(userId,id,field,value) { if (!['is_pinned','is_archived'].includes(field)) throw new Error('حقل غير مسموح'); const row = await SystemDB.get(`UPDATE kw_alerts SET ${field}=$1,updated_at=NOW() WHERE id=$2 AND user_id=$3 RETURNING *`,[!!value,id,userId]); if (!row) throw new Error('التنبيه غير موجود'); return row; },
 
     async getStats(userId) {
-        const [keywords, today, chats, accounts, unread, replies] = await Promise.all([
+        const [keywords, today, chats, accounts, unread, replies, topKeywords, topGroups, topSenders, dailyChart] = await Promise.all([
             SystemDB.get(`SELECT COUNT(*) FROM kw_keywords WHERE user_id=$1`, [userId]),
             SystemDB.get(`SELECT COUNT(*) FROM kw_alerts WHERE user_id=$1 AND message_time>=CURRENT_DATE`, [userId]),
             SystemDB.get(`SELECT COUNT(DISTINCT COALESCE(sender_phone,group_jid)) FROM kw_alerts WHERE user_id=$1`, [userId]),
             SystemDB.get(`SELECT COUNT(*) FROM accounts WHERE user_id=$1 AND status='connected'`, [userId]),
             SystemDB.get(`SELECT COUNT(*) FROM kw_notifications WHERE user_id=$1 AND is_read=FALSE`, [userId]),
             SystemDB.get(`SELECT COUNT(*) FROM kw_replies WHERE user_id=$1 AND status='sent'`, [userId]),
+            SystemDB.all(`SELECT matched_keyword,COUNT(*) cnt FROM kw_alerts WHERE user_id=$1 GROUP BY matched_keyword ORDER BY cnt DESC LIMIT 5`,[userId]),
+            SystemDB.all(`SELECT COALESCE(group_name,'خاص') group_name,COUNT(*) cnt FROM kw_alerts WHERE user_id=$1 GROUP BY group_name ORDER BY cnt DESC LIMIT 5`,[userId]),
+            SystemDB.all(`SELECT sender_name,sender_phone,COUNT(*) cnt FROM kw_alerts WHERE user_id=$1 GROUP BY sender_name,sender_phone ORDER BY cnt DESC LIMIT 5`,[userId]),
+            SystemDB.all(`SELECT DATE_TRUNC('day',message_time) day,COUNT(*) cnt FROM kw_alerts WHERE user_id=$1 AND message_time>=NOW()-INTERVAL '7 days' GROUP BY day ORDER BY day`,[userId]),
         ]);
-        return { keywords_count:Number(keywords?.count||0), today_count:Number(today?.count||0), matched_chats:Number(chats?.count||0), active_accounts:Number(accounts?.count||0), unread_notifications:Number(unread?.count||0), replies_sent:Number(replies?.count||0), top_keywords:await SystemDB.all(`SELECT matched_keyword,COUNT(*) cnt FROM kw_alerts WHERE user_id=$1 GROUP BY matched_keyword ORDER BY cnt DESC LIMIT 5`,[userId]) };
+        return { keywords_count:Number(keywords?.count||0), today_count:Number(today?.count||0), matched_chats:Number(chats?.count||0), active_accounts:Number(accounts?.count||0), unread_notifications:Number(unread?.count||0), replies_sent:Number(replies?.count||0), top_keywords:topKeywords, top_groups:topGroups, top_senders:topSenders, daily_chart:dailyChart };
     },
 
     _defaultSettings() { return { monitoring_enabled:true, notifications_enabled:true, sound_enabled:true, scan_groups:true, scan_private:true, account_ids:[], log_retention_days:90 }; },
@@ -192,7 +200,7 @@ const KeywordMonitoringService = {
     stopWorker() { if(workerTimer) clearInterval(workerTimer); if(heartbeatTimer) clearInterval(heartbeatTimer); workerTimer=null; heartbeatTimer=null; },
 
     async getNotifications(userId, options={}) { const limit=Math.min(100,Number(options.limit)||50); return SystemDB.all(`SELECT n.*,a.matched_keyword,a.message_text,a.sender_phone FROM kw_notifications n LEFT JOIN kw_alerts a ON a.id=n.alert_id WHERE n.user_id=$1 ORDER BY n.created_at DESC LIMIT $2`,[userId,limit]); },
-    async markNotificationRead(userId,id) { return SystemDB.get(`UPDATE kw_notifications SET is_read=TRUE,read_at=NOW() WHERE id=$1 AND user_id=$2 RETURNING *`,[id,userId]); },
+    async markNotificationRead(userId,id) { const row = await SystemDB.get(`UPDATE kw_notifications SET is_read=TRUE,read_at=NOW() WHERE id=$1 AND user_id=$2 RETURNING *`,[id,userId]); if (!row) throw new Error('الإشعار غير موجود'); return row; },
     async getHealth(userId) { return SystemDB.all(`SELECT a.id account_id,a.user_id,a.name account_name,a.phone_number account_phone,a.status account_status,COALESCE(h.status,CASE WHEN a.status='connected' THEN 'connected' ELSE 'disconnected' END) status,h.last_heartbeat,h.last_event_at,h.last_error,COALESCE(h.updated_at,a.updated_at) updated_at FROM accounts a LEFT JOIN kw_service_health h ON h.account_id=a.id WHERE a.user_id=$1 ORDER BY a.name`,[userId]); },
 
     async sendReply(userId,alertId,body) {

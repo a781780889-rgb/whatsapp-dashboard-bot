@@ -227,7 +227,7 @@ function AppInner() {
           <Route path="/schedules"      element={<ScheduleDashboardView accountId={selectedAccountId} accounts={accounts} />} />
           <Route path="/ad-library"     element={<AdLibraryView        accountId={selectedAccountId} />} />
           <Route path="/ai-automation" element={<AIAutomationView />} />
-          <Route path="/keywords"      element={<KeywordMonitoringView />} />
+          <Route path="/keywords"      element={<KeywordMonitoringView userId={currentUser.id} />} />
           <Route path="/diagnostics"   element={<DiagnosticsDashboardView accountId={selectedAccountId} />} />
 
           {/* Admin-only routes */}

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { io, Socket } from 'socket.io-client';
 import {
   Search, Plus, Trash2, Edit3, Bell, BellOff, Settings,
   Copy, Phone, MessageSquare, ExternalLink, Eye, CheckCircle,
@@ -13,7 +14,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/ToastProvider';
-import { API, authFetch } from '@/utils/api';
+import { API, authFetch, TOKEN_KEY } from '@/utils/api';
 import { cn } from '@/utils/cn';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -38,9 +39,9 @@ interface KWStats {
   keywords_count: number; today_count: number; week_count?: number;
   matched_chats?: number; active_accounts?: number; unread_notifications?: number; replies_sent?: number;
   top_keywords: { matched_keyword: string; cnt: string }[];
-  top_groups?: { group_name: string; cnt: string }[];
-  top_senders?: { sender_name: string; sender_phone: string; cnt: string }[];
-  daily_chart?: { day: string; cnt: string }[];
+  top_groups: { group_name: string; cnt: string }[];
+  top_senders: { sender_name: string; sender_phone: string; cnt: string }[];
+  daily_chart: { day: string; cnt: string }[];
 }
 
 interface KWSettings {
@@ -408,8 +409,9 @@ function AlertCard({ alert, onDetail, onReview, onDelete, onReply, onPin, onArch
 }
 
 // ─── MAIN VIEW ────────────────────────────────────────────────────────────────
-export default function KeywordMonitoringView() {
+export default function KeywordMonitoringView({ userId }: { userId: string }) {
   const toast = useToast();
+  const addToast = toast.addToast;
 
   // state
   const [tab, setTab]         = useState<'monitor' | 'keywords' | 'stats' | 'settings' | 'log'>('monitor');
@@ -520,21 +522,25 @@ export default function KeywordMonitoringView() {
 
   // ── Socket.IO realtime ───────────────────────────────────────────────────
   useEffect(() => {
-    const handler = (evt: CustomEvent) => {
-      const { alert } = evt.detail;
+    const socket: Socket = io(window.location.origin, { path: '/socket.io', transports: ['websocket', 'polling'], reconnection: true });
+    const onAlert = (payload: any) => {
+      if (!payload || payload.userId !== userId || !payload.alert) return;
+      const alert = payload.alert;
       setAlerts(prev => [alert, ...prev.filter(a => a.id !== alert.id)].slice(0, 20));
-      setNotifications(prev => [{ id: evt.detail.notification?.id || `live-${alert.id}`, ...evt.detail.notification, alert_id: alert.id, is_read: false, created_at: new Date().toISOString() }, ...prev]);
       setNewCount(p => p + 1);
-      if (settings.sound_enabled) {
-        try { new Audio('/sounds/alert.mp3').play().catch(() => {}); } catch {}
-      }
-      toast.info(`تنبيه: ${alert.matched_keyword} من ${alert.sender_name}`);
+      if (settings.sound_enabled) { try { new Audio('/sounds/alert.mp3').play().catch(() => {}); } catch {} }
+      addToast({ title: `تنبيه: ${alert.matched_keyword} من ${alert.sender_name}`, type: 'info' });
     };
-    window.addEventListener('ws:keyword_alert' as any, handler);
-    const notificationHandler = () => { fetchNotifications(); setNewCount(p => p + 1); };
-    window.addEventListener('ws:keyword_notification' as any, notificationHandler);
-    return () => { window.removeEventListener('ws:keyword_alert' as any, handler); window.removeEventListener('ws:keyword_notification' as any, notificationHandler); };
-  }, [settings.sound_enabled, fetchNotifications]);
+    const onNotification = (payload: any) => {
+      if (!payload || payload.userId !== userId) return;
+      if (payload.notification) setNotifications(prev => [payload.notification, ...prev.filter(n => n.id !== payload.notification.id)]);
+      setNewCount(p => p + 1);
+    };
+    socket.on('connect', () => socket.emit('join_user', { userId, token: localStorage.getItem(TOKEN_KEY) || '' }));
+    socket.on('keyword_alert', onAlert);
+    socket.on('keyword_notification', onNotification);
+    return () => { socket.off('keyword_alert', onAlert); socket.off('keyword_notification', onNotification); socket.disconnect(); };
+  }, [userId, settings.sound_enabled, addToast]);
 
   // ── Keyword actions ──────────────────────────────────────────────────────
   async function saveKeyword(data: any) {
@@ -543,8 +549,8 @@ export default function KeywordMonitoringView() {
     const meth = isEdit ? 'PATCH' : 'POST';
     const r = await authFetch(url, { method: meth, body: JSON.stringify(data) });
     const d = await r.json();
-    if (!d.success) { toast.error(d.error || 'خطأ'); return; }
-    toast.success(isEdit ? 'تم التعديل' : 'تمت الإضافة');
+    if (!d.success) { addToast({ title: d.error || 'خطأ', type: 'error' }); return; }
+    addToast({ title: isEdit ? 'تم التعديل' : 'تمت الإضافة', type: 'success' });
     await fetchKeywords();
   }
 
@@ -552,7 +558,7 @@ export default function KeywordMonitoringView() {
     if (!confirm('حذف الكلمة؟')) return;
     const r = await authFetch(`${API}/keywords/${id}`, { method: 'DELETE' });
     const d = await r.json();
-    if (d.success) { toast.success('تم الحذف'); fetchKeywords(); }
+    if (d.success) { addToast({ title: 'تم الحذف', type: 'success' }); fetchKeywords(); }
   }
 
   async function toggleKeyword(kw: Keyword) {
@@ -569,23 +575,23 @@ export default function KeywordMonitoringView() {
       method: 'PATCH', body: JSON.stringify({ status: 'reviewed' })
     });
     const d = await r.json();
-    if (d.success) { toast.success('تمت المراجعة'); fetchAlerts(alertPage); }
+    if (d.success) { addToast({ title: 'تمت المراجعة', type: 'success' }); fetchAlerts(alertPage); }
   }
 
   async function toggleAlertFlag(alert: KeywordAlert, field: 'is_pinned' | 'is_archived') {
     const r = await authFetch(`${API}/keyword-alerts/${alert.id}/flag`, { method: 'PATCH', body: JSON.stringify({ field, value: !alert[field] }) });
-    const d = await r.json(); if (d.success) { toast.success(field === 'is_pinned' ? (alert[field] ? 'تم إلغاء التثبيت' : 'تم تثبيت التنبيه') : 'تم تحديث الأرشفة'); fetchAlerts(alertPage); }
+    const d = await r.json(); if (d.success) { addToast({ title: field === 'is_pinned' ? (alert[field] ? 'تم إلغاء التثبيت' : 'تم تثبيت التنبيه') : 'تم تحديث الأرشفة', type: 'success' }); fetchAlerts(alertPage); }
   }
 
   async function sendReply() {
     if (!replyAlert || !replyBody.trim()) return; setReplySending(true);
-    try { const r = await authFetch(`${API}/keyword-alerts/${replyAlert.id}/reply`, { method: 'POST', body: JSON.stringify({ body: replyBody }) }); const d = await r.json(); if (!d.success) throw new Error(d.error); toast.success('تم إرسال الرد من الحساب المستلم'); setReplyAlert(null); setReplyBody(''); fetchAlerts(alertPage); } catch (e: any) { toast.error(e.message || 'فشل إرسال الرد'); } finally { setReplySending(false); }
+    try { const r = await authFetch(`${API}/keyword-alerts/${replyAlert.id}/reply`, { method: 'POST', body: JSON.stringify({ body: replyBody }) }); const d = await r.json(); if (!d.success) throw new Error(d.error); addToast({ title: 'تم إرسال الرد من الحساب المستلم', type: 'success' }); setReplyAlert(null); setReplyBody(''); fetchAlerts(alertPage); } catch (e: any) { addToast({ title: e.message || 'فشل إرسال الرد', type: 'error' }); } finally { setReplySending(false); }
   }
 
   async function deleteAlert(id: string) {
     const r = await authFetch(`${API}/keyword-alerts/${id}`, { method: 'DELETE' });
     const d = await r.json();
-    if (d.success) { toast.success('تم حذف التنبيه'); fetchAlerts(alertPage); }
+    if (d.success) { addToast({ title: 'تم حذف التنبيه', type: 'success' }); fetchAlerts(alertPage); }
   }
 
   async function alertAction(alert: KeywordAlert, type: string, payload?: any) {
@@ -598,7 +604,7 @@ export default function KeywordMonitoringView() {
       await authFetch(`${API}/keyword-alerts/${alert.id}/note`, {
         method: 'POST', body: JSON.stringify({ note: payload })
       });
-      toast.success('تم حفظ الملاحظة');
+      addToast({ title: 'تم حفظ الملاحظة', type: 'success' });
     }
   }
 
@@ -625,8 +631,8 @@ export default function KeywordMonitoringView() {
           method: 'POST', body: JSON.stringify({ keywords })
         });
         const d = await r.json();
-        if (d.success) { toast.success(`تم استيراد ${d.added} كلمة`); fetchKeywords(); }
-      } catch { toast.error('ملف غير صحيح'); }
+        if (d.success) { addToast({ title: `تم استيراد ${d.added} كلمة`, type: 'success' }); fetchKeywords(); }
+      } catch { addToast({ title: 'ملف غير صحيح', type: 'error' }); }
     };
     inp.click();
   }
@@ -637,7 +643,7 @@ export default function KeywordMonitoringView() {
       method: 'POST', body: JSON.stringify(settings)
     });
     const d = await r.json();
-    if (d.success) toast.success('تم حفظ الإعدادات');
+    if (d.success) addToast({ title: 'تم حفظ الإعدادات', type: 'success' });
   }
 
   // ── Filtered keywords ────────────────────────────────────────────────────

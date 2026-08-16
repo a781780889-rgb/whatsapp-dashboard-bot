@@ -1,4 +1,5 @@
 'use strict';
+const JWTService = require('./JWTService');
 let _io = null;
 const rooms = new Map();
 
@@ -9,6 +10,19 @@ const SocketBridge = {
             socket.on('join', (room) => {
                 socket.join(room);
                 rooms.set(room, (rooms.get(room) || 0) + 1);
+            });
+            socket.on('join_user', ({ userId, token } = {}, ack) => {
+                try {
+                    const payload = JWTService.verifyAccessToken(String(token || '').replace(/^Bearer\\s+/i, ''));
+                    const tokenUserId = String(payload?.id || payload?.userId || '');
+                    if (!userId || tokenUserId !== String(userId)) throw new Error('invalid user room');
+                    const room = `user:${userId}`;
+                    socket.join(room);
+                    rooms.set(room, (rooms.get(room) || 0) + 1);
+                    if (typeof ack === 'function') ack({ success: true });
+                } catch (_) {
+                    if (typeof ack === 'function') ack({ success: false });
+                }
             });
             socket.on('leave', (room) => {
                 socket.leave(room);
