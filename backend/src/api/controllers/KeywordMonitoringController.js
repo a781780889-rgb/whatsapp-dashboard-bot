@@ -150,6 +150,27 @@ const KWController = {
             res.status(500).json({ success: false, error: err.message });
         }
     },
+
+    async getNotifications(req, res) {
+        try { res.json({ success: true, notifications: await KeywordMonitoringService.getNotifications(req.user.id, req.query) }); }
+        catch (err) { res.status(500).json({ success: false, error: err.message }); }
+    },
+    async markNotificationRead(req, res) {
+        try { res.json({ success: true, notification: await KeywordMonitoringService.markNotificationRead(req.user.id, req.params.id) }); }
+        catch (err) { res.status(500).json({ success: false, error: err.message }); }
+    },
+    async getHealth(req, res) {
+        try { res.json({ success: true, health: await KeywordMonitoringService.getHealth(req.user.id) }); }
+        catch (err) { res.status(500).json({ success: false, error: err.message }); }
+    },
+    async setFlag(req, res) {
+        try { res.json({ success: true, alert: await KeywordMonitoringService.setAlertFlag(req.user.id, req.params.id, req.body.field, req.body.value) }); }
+        catch (err) { res.status(400).json({ success: false, error: err.message }); }
+    },
+    async sendReply(req, res) {
+        try { res.json({ success: true, reply: await KeywordMonitoringService.sendReply(req.user.id, req.params.id, req.body.body) }); }
+        catch (err) { res.status(400).json({ success: false, error: err.message }); }
+    },
 };
 
 module.exports = KWController;

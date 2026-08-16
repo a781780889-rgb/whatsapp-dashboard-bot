@@ -206,6 +206,107 @@ const SystemDB = {
         `);
         await p.query(`CREATE INDEX IF NOT EXISTS idx_kw_activity_user ON kw_activity_log(user_id, created_at DESC)`).catch(() => {});
 
+        // ── Keyword Center v2: durable inbox, normalized messages, notifications, replies ──
+        // These tables are additive so existing keyword data remains readable during rollout.
+        await p.query(`
+            CREATE TABLE IF NOT EXISTS kw_event_queue (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id UUID NOT NULL,
+                account_id UUID NOT NULL,
+                message_id TEXT NOT NULL,
+                event_type VARCHAR(40) NOT NULL DEFAULT 'message_received',
+                payload JSONB NOT NULL DEFAULT '{}',
+                status VARCHAR(20) NOT NULL DEFAULT 'received',
+                attempts INT NOT NULL DEFAULT 0,
+                available_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                locked_at TIMESTAMPTZ,
+                processed_at TIMESTAMPTZ,
+                last_error TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE(account_id, message_id, event_type)
+            )
+        `);
+        await p.query(`CREATE INDEX IF NOT EXISTS idx_kw_queue_ready ON kw_event_queue(status, available_at)`).catch(() => {});
+        await p.query(`CREATE INDEX IF NOT EXISTS idx_kw_queue_user ON kw_event_queue(user_id, created_at DESC)`).catch(() => {});
+
+        await p.query(`
+            CREATE TABLE IF NOT EXISTS kw_messages (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id UUID NOT NULL,
+                account_id UUID NOT NULL,
+                message_id TEXT NOT NULL,
+                remote_jid TEXT,
+                participant_jid TEXT,
+                sender_phone TEXT,
+                sender_name TEXT,
+                chat_name TEXT,
+                message_text TEXT,
+                is_group BOOLEAN NOT NULL DEFAULT FALSE,
+                message_time TIMESTAMPTZ,
+                raw_payload JSONB NOT NULL DEFAULT '{}',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE(account_id, message_id)
+            )
+        `);
+        await p.query(`CREATE INDEX IF NOT EXISTS idx_kw_messages_user_time ON kw_messages(user_id, message_time DESC)`).catch(() => {});
+        await p.query(`CREATE INDEX IF NOT EXISTS idx_kw_messages_sender ON kw_messages(user_id, sender_phone)`).catch(() => {});
+
+        await p.query(`
+            CREATE TABLE IF NOT EXISTS kw_notifications (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id UUID NOT NULL,
+                alert_id UUID,
+                type VARCHAR(40) NOT NULL DEFAULT 'keyword_match',
+                title TEXT NOT NULL,
+                body TEXT,
+                is_read BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                read_at TIMESTAMPTZ
+            )
+        `);
+        await p.query(`CREATE INDEX IF NOT EXISTS idx_kw_notifications_user ON kw_notifications(user_id, is_read, created_at DESC)`).catch(() => {});
+
+        await p.query(`
+            CREATE TABLE IF NOT EXISTS kw_replies (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id UUID NOT NULL,
+                alert_id UUID NOT NULL,
+                account_id UUID NOT NULL,
+                recipient_jid TEXT NOT NULL,
+                body TEXT NOT NULL,
+                status VARCHAR(20) NOT NULL DEFAULT 'queued',
+                whatsapp_message_id TEXT,
+                error TEXT,
+                sent_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        `);
+        await p.query(`CREATE INDEX IF NOT EXISTS idx_kw_replies_user ON kw_replies(user_id, created_at DESC)`).catch(() => {});
+
+        await p.query(`
+            CREATE TABLE IF NOT EXISTS kw_service_health (
+                account_id UUID PRIMARY KEY,
+                user_id UUID,
+                status VARCHAR(30) NOT NULL DEFAULT 'starting',
+                last_heartbeat TIMESTAMPTZ,
+                last_event_at TIMESTAMPTZ,
+                last_error TEXT,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        `);
+
+        // Safe upgrades for installations created by the legacy schema.
+        await p.query(`ALTER TABLE kw_keywords ADD COLUMN IF NOT EXISTS match_type VARCHAR(30) DEFAULT 'contains'`).catch(() => {});
+        await p.query(`ALTER TABLE kw_keywords ADD COLUMN IF NOT EXISTS description TEXT`).catch(() => {});
+        await p.query(`ALTER TABLE kw_keywords ADD COLUMN IF NOT EXISTS notify_enabled BOOLEAN DEFAULT TRUE`).catch(() => {});
+        await p.query(`ALTER TABLE kw_keywords ADD COLUMN IF NOT EXISTS private_reply_enabled BOOLEAN DEFAULT FALSE`).catch(() => {});
+        await p.query(`ALTER TABLE kw_keywords ADD COLUMN IF NOT EXISTS terms JSONB`).catch(() => {});
+        await p.query(`ALTER TABLE kw_alerts ADD COLUMN IF NOT EXISTS message_id TEXT`).catch(() => {});
+        await p.query(`ALTER TABLE kw_alerts ADD COLUMN IF NOT EXISTS is_pinned BOOLEAN DEFAULT FALSE`).catch(() => {});
+        await p.query(`ALTER TABLE kw_alerts ADD COLUMN IF NOT EXISTS is_archived BOOLEAN DEFAULT FALSE`).catch(() => {});
+        await p.query(`ALTER TABLE kw_alerts ADD COLUMN IF NOT EXISTS notification_id UUID`).catch(() => {});
+        await p.query(`CREATE UNIQUE INDEX IF NOT EXISTS ux_kw_alerts_event ON kw_alerts(account_id, message_id, keyword_id) WHERE message_id IS NOT NULL`).catch(() => {});
+
         // ── Telegram System Tables ────────────────────────────────────────
         const TelegramMigrations = require('./TelegramMigrations');
         await TelegramMigrations.run();

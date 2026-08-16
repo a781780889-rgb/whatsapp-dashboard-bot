@@ -20,7 +20,9 @@ import { cn } from '@/utils/cn';
 interface Keyword {
   id: string; word: string; category: string; priority: string;
   color: string; case_sensitive: boolean; is_active: boolean;
-  match_count: number; created_at: string;
+  match_count: number; created_at: string; match_type?: string;
+  description?: string; notify_enabled?: boolean; private_reply_enabled?: boolean;
+  terms?: string[];
 }
 
 interface KeywordAlert {
@@ -28,20 +30,23 @@ interface KeywordAlert {
   sender_name: string; sender_phone: string; group_name: string;
   group_jid: string; account_id: string; message_time: string;
   status: string; internal_note?: string;
-  keyword_color?: string; keyword_priority?: string;
+  keyword_color?: string; keyword_priority?: string; account_name?: string;
+  account_phone?: string; is_pinned?: boolean; is_archived?: boolean;
 }
 
 interface KWStats {
-  keywords_count: number; today_count: number; week_count: number;
+  keywords_count: number; today_count: number; week_count?: number;
+  matched_chats?: number; active_accounts?: number; unread_notifications?: number; replies_sent?: number;
   top_keywords: { matched_keyword: string; cnt: string }[];
-  top_groups:   { group_name: string; cnt: string }[];
-  top_senders:  { sender_name: string; sender_phone: string; cnt: string }[];
-  daily_chart:  { day: string; cnt: string }[];
+  top_groups?: { group_name: string; cnt: string }[];
+  top_senders?: { sender_name: string; sender_phone: string; cnt: string }[];
+  daily_chart?: { day: string; cnt: string }[];
 }
 
 interface KWSettings {
   monitoring_enabled: boolean; notifications_enabled: boolean;
   sound_enabled: boolean; sound_type: string; log_retention_days: number;
+  scan_groups?: boolean; scan_private?: boolean; account_ids?: string[];
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -106,6 +111,11 @@ function KeywordFormModal({
     priority:       kw?.priority       ?? 'normal',
     color:          kw?.color          ?? '#00A884',
     case_sensitive: kw?.case_sensitive ?? false,
+    match_type: kw?.match_type ?? 'contains',
+    terms: kw?.terms?.join(', ') ?? '',
+    description: kw?.description ?? '',
+    notify_enabled: kw?.notify_enabled ?? true,
+    private_reply_enabled: kw?.private_reply_enabled ?? false,
   });
   const [saving, setSaving] = useState(false);
 
@@ -114,7 +124,10 @@ function KeywordFormModal({
   async function handle() {
     if (!form.word.trim()) return;
     setSaving(true);
-    try { await onSave(form); onClose(); } finally { setSaving(false); }
+    try {
+      const payload = { ...form, terms: form.terms.split(',').map((v: string) => v.trim()).filter(Boolean) };
+      await onSave(payload); onClose();
+    } finally { setSaving(false); }
   }
 
   return (
@@ -172,6 +185,16 @@ function KeywordFormModal({
                 className="w-7 h-7 rounded-lg cursor-pointer border-2 border-[var(--border-default)]" />
             </div>
           </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium mb-1.5 text-[var(--text-secondary)]">نوع المطابقة</label>
+              <select className="w-full bg-[var(--bg-elevated)] border border-[var(--border-default)] rounded-xl px-3 py-2.5 text-sm" value={form.match_type} onChange={e => setForm(p => ({ ...p, match_type: e.target.value }))}>
+                <option value="contains">تحتوي على الكلمة</option><option value="exact">مطابقة كاملة</option><option value="starts_with">تبدأ بالكلمة</option><option value="ends_with">تنتهي بالكلمة</option><option value="multiple">عدة كلمات داخل الرسالة</option>
+              </select>
+            </div>
+            <div><label className="block text-sm font-medium mb-1.5 text-[var(--text-secondary)]">عدة كلمات</label><input className="w-full bg-[var(--bg-elevated)] border border-[var(--border-default)] rounded-xl px-3 py-2.5 text-sm" placeholder="سعر, تكلفة, عرض" value={form.terms} onChange={e => setForm(p => ({ ...p, terms: e.target.value }))} dir="auto" /></div>
+          </div>
+          <input className="w-full bg-[var(--bg-elevated)] border border-[var(--border-default)] rounded-xl px-3 py-2.5 text-sm" placeholder="وصف اختياري" value={form.description} onChange={e => setForm(p => ({ ...p, description: e.target.value }))} />
           <label className="flex items-center gap-2 cursor-pointer">
             <div onClick={() => setForm(p => ({ ...p, case_sensitive: !p.case_sensitive }))}
               className={cn('w-10 h-5 rounded-full transition-colors relative', form.case_sensitive ? 'bg-[var(--brand-primary)]' : 'bg-[var(--bg-elevated)]')}>
@@ -179,6 +202,10 @@ function KeywordFormModal({
             </div>
             <span className="text-sm text-[var(--text-secondary)]">حساس لحالة الأحرف</span>
           </label>
+          <div className="flex flex-wrap gap-4 text-sm text-[var(--text-secondary)]">
+            <label className="flex items-center gap-2"><input type="checkbox" checked={form.notify_enabled} onChange={e => setForm(p => ({ ...p, notify_enabled: e.target.checked }))} /> إشعار عند الاكتشاف</label>
+            <label className="flex items-center gap-2"><input type="checkbox" checked={form.private_reply_enabled} onChange={e => setForm(p => ({ ...p, private_reply_enabled: e.target.checked }))} /> تفعيل الرد الخاص</label>
+          </div>
         </div>
         <div className="flex gap-3 p-5 border-t border-[var(--border-default)]">
           <Button onClick={handle} disabled={!form.word.trim() || saving} className="flex-1 gap-2">
@@ -298,6 +325,7 @@ function AlertDetailModal({ alert, onClose, onAction }: {
 
           {/* أزرار الحالة */}
           <div className="flex gap-2">
+            <Button onClick={() => { onAction('reply'); onClose(); }} className="flex-1 gap-2"><MessageSquare className="w-4 h-4" /> الرد على الخاص</Button>
             <Button onClick={() => { onAction('status', 'reviewed'); onClose(); }} variant="outline" className="flex-1 gap-2 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/10">
               <CheckCircle className="w-4 h-4" /> تمت المراجعة
             </Button>
@@ -312,9 +340,9 @@ function AlertDetailModal({ alert, onClose, onAction }: {
 }
 
 // ─── Alert Card ───────────────────────────────────────────────────────────────
-function AlertCard({ alert, onDetail, onReview, onDelete }: {
+function AlertCard({ alert, onDetail, onReview, onDelete, onReply, onPin, onArchive }: {
   alert: KeywordAlert;
-  onDetail: () => void; onReview: () => void; onDelete: () => void;
+  onDetail: () => void; onReview: () => void; onDelete: () => void; onReply: () => void; onPin: () => void; onArchive: () => void;
 }) {
   const pc = PRIORITY_CONFIG[alert.keyword_priority || 'normal'];
   const sc = STATUS_CONFIG[alert.status] || STATUS_CONFIG.new;
@@ -358,10 +386,12 @@ function AlertCard({ alert, onDetail, onReview, onDelete }: {
           className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-[var(--bg-elevated)] hover:bg-[var(--brand-primary)]/10 text-[var(--text-muted)] hover:text-[var(--brand-primary)] text-xs font-medium transition-colors">
           <Eye className="w-3.5 h-3.5" /> التفاصيل
         </button>
-        <button onClick={() => window.open(`https://wa.me/${alert.sender_phone}`, '_blank')}
+        <button onClick={onReply} title="الرد على الخاص"
           className="flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg bg-[var(--brand-primary)]/10 hover:bg-[var(--brand-primary)]/20 text-[var(--brand-primary)] text-xs font-medium transition-colors">
           <MessageSquare className="w-3.5 h-3.5" />
         </button>
+        <button onClick={onPin} title="تثبيت" className={cn('p-1.5 rounded-lg transition-colors', alert.is_pinned ? 'bg-amber-500/15 text-amber-400' : 'bg-[var(--bg-elevated)] text-[var(--text-muted)] hover:text-amber-400')}><Star className="w-3.5 h-3.5" /></button>
+        <button onClick={onArchive} title="أرشفة" className="p-1.5 rounded-lg bg-[var(--bg-elevated)] text-[var(--text-muted)] hover:text-blue-400"><History className="w-3.5 h-3.5" /></button>
         {alert.status !== 'reviewed' && (
           <button onClick={onReview}
             className="flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 text-xs font-medium transition-colors">
@@ -398,6 +428,11 @@ export default function KeywordMonitoringView() {
   const [alertPages, setAlertPages] = useState(1);
   const [detailAlert, setDetailAlert] = useState<KeywordAlert | null>(null);
   const [newCount, setNewCount]   = useState(0);
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [health, setHealth] = useState<any[]>([]);
+  const [replyAlert, setReplyAlert] = useState<KeywordAlert | null>(null);
+  const [replyBody, setReplyBody] = useState('');
+  const [replySending, setReplySending] = useState(false);
 
   // filter state
   const [filter, setFilter] = useState({ keyword: '', group_name: '', status: '', phone: '' });
@@ -408,6 +443,7 @@ export default function KeywordMonitoringView() {
   const [settings, setSettings] = useState<KWSettings>({
     monitoring_enabled: true, notifications_enabled: true,
     sound_enabled: true, sound_type: 'default', log_retention_days: 30,
+    scan_groups: true, scan_private: true, account_ids: [],
   });
   const [activityLog, setActivityLog] = useState<any[]>([]);
 
@@ -460,6 +496,14 @@ export default function KeywordMonitoringView() {
     } catch {}
   }, []);
 
+  const fetchNotifications = useCallback(async () => {
+    try { const r = await authFetch(`${API}/keywords/notifications?limit=50`); const d = await r.json(); if (d.success) setNotifications(d.notifications || []); } catch {}
+  }, []);
+
+  const fetchHealth = useCallback(async () => {
+    try { const r = await authFetch(`${API}/keywords/health`); const d = await r.json(); if (d.success) setHealth(d.health || []); } catch {}
+  }, []);
+
   const fetchLog = useCallback(async () => {
     try {
       const r = await authFetch(`${API}/keywords/activity-log`);
@@ -468,7 +512,8 @@ export default function KeywordMonitoringView() {
     } catch {}
   }, []);
 
-  useEffect(() => { fetchKeywords(); fetchSettings(); }, []);
+  useEffect(() => { fetchKeywords(); fetchSettings(); fetchNotifications(); fetchHealth(); }, []);
+  useEffect(() => { const timer = window.setInterval(() => { fetchNotifications(); fetchHealth(); }, 10000); return () => window.clearInterval(timer); }, [fetchNotifications, fetchHealth]);
   useEffect(() => { if (tab === 'monitor') fetchAlerts(1); }, [tab, filter]);
   useEffect(() => { if (tab === 'stats')   fetchStats(); }, [tab]);
   useEffect(() => { if (tab === 'log')     fetchLog(); }, [tab]);
@@ -477,7 +522,8 @@ export default function KeywordMonitoringView() {
   useEffect(() => {
     const handler = (evt: CustomEvent) => {
       const { alert } = evt.detail;
-      setAlerts(prev => [alert, ...prev].slice(0, 20));
+      setAlerts(prev => [alert, ...prev.filter(a => a.id !== alert.id)].slice(0, 20));
+      setNotifications(prev => [{ id: evt.detail.notification?.id || `live-${alert.id}`, ...evt.detail.notification, alert_id: alert.id, is_read: false, created_at: new Date().toISOString() }, ...prev]);
       setNewCount(p => p + 1);
       if (settings.sound_enabled) {
         try { new Audio('/sounds/alert.mp3').play().catch(() => {}); } catch {}
@@ -485,8 +531,10 @@ export default function KeywordMonitoringView() {
       toast.info(`تنبيه: ${alert.matched_keyword} من ${alert.sender_name}`);
     };
     window.addEventListener('ws:keyword_alert' as any, handler);
-    return () => window.removeEventListener('ws:keyword_alert' as any, handler);
-  }, [settings.sound_enabled]);
+    const notificationHandler = () => { fetchNotifications(); setNewCount(p => p + 1); };
+    window.addEventListener('ws:keyword_notification' as any, notificationHandler);
+    return () => { window.removeEventListener('ws:keyword_alert' as any, handler); window.removeEventListener('ws:keyword_notification' as any, notificationHandler); };
+  }, [settings.sound_enabled, fetchNotifications]);
 
   // ── Keyword actions ──────────────────────────────────────────────────────
   async function saveKeyword(data: any) {
@@ -524,6 +572,16 @@ export default function KeywordMonitoringView() {
     if (d.success) { toast.success('تمت المراجعة'); fetchAlerts(alertPage); }
   }
 
+  async function toggleAlertFlag(alert: KeywordAlert, field: 'is_pinned' | 'is_archived') {
+    const r = await authFetch(`${API}/keyword-alerts/${alert.id}/flag`, { method: 'PATCH', body: JSON.stringify({ field, value: !alert[field] }) });
+    const d = await r.json(); if (d.success) { toast.success(field === 'is_pinned' ? (alert[field] ? 'تم إلغاء التثبيت' : 'تم تثبيت التنبيه') : 'تم تحديث الأرشفة'); fetchAlerts(alertPage); }
+  }
+
+  async function sendReply() {
+    if (!replyAlert || !replyBody.trim()) return; setReplySending(true);
+    try { const r = await authFetch(`${API}/keyword-alerts/${replyAlert.id}/reply`, { method: 'POST', body: JSON.stringify({ body: replyBody }) }); const d = await r.json(); if (!d.success) throw new Error(d.error); toast.success('تم إرسال الرد من الحساب المستلم'); setReplyAlert(null); setReplyBody(''); fetchAlerts(alertPage); } catch (e: any) { toast.error(e.message || 'فشل إرسال الرد'); } finally { setReplySending(false); }
+  }
+
   async function deleteAlert(id: string) {
     const r = await authFetch(`${API}/keyword-alerts/${id}`, { method: 'DELETE' });
     const d = await r.json();
@@ -533,6 +591,9 @@ export default function KeywordMonitoringView() {
   async function alertAction(alert: KeywordAlert, type: string, payload?: any) {
     if (type === 'status') { await reviewAlert(alert.id); }
     else if (type === 'delete') { await deleteAlert(alert.id); }
+    else if (type === 'reply') { setReplyAlert(alert); }
+    else if (type === 'pin') { await toggleAlertFlag(alert, 'is_pinned'); }
+    else if (type === 'archive') { await toggleAlertFlag(alert, 'is_archived'); }
     else if (type === 'note') {
       await authFetch(`${API}/keyword-alerts/${alert.id}/note`, {
         method: 'POST', body: JSON.stringify({ note: payload })
@@ -670,6 +731,13 @@ export default function KeywordMonitoringView() {
               ))}
             </div>
 
+            <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-2xl p-4 flex flex-wrap items-center gap-4">
+              <div className="flex items-center gap-2"><span className={cn('w-2.5 h-2.5 rounded-full', health.length && health.every(h => h.status === 'connected') ? 'bg-emerald-400 animate-pulse' : health.length ? 'bg-amber-400' : 'bg-slate-400')} /><span className="text-sm font-semibold">{health.length && health.every(h => h.status === 'connected') ? 'النظام يعمل - استقبال مباشر' : health.length ? 'الاتصال غير مستقر' : 'بانتظار اتصال الحسابات'}</span></div>
+              <span className="text-xs text-[var(--text-muted)]">الحسابات النشطة: {stats?.active_accounts ?? health.filter(h => h.status === 'connected').length}</span>
+              <span className="text-xs text-[var(--text-muted)]">آخر نبضة: {health[0]?.updated_at ? timeAgo(health[0].updated_at) : '—'}</span>
+              <span className="text-xs text-[var(--text-muted)]">التنبيهات غير المقروءة: {stats?.unread_notifications ?? notifications.filter(n => !n.is_read).length}</span>
+            </div>
+
             {/* Filter bar */}
             <div className="flex items-center gap-2 flex-wrap">
               <div className="relative flex-1 min-w-48">
@@ -749,6 +817,9 @@ export default function KeywordMonitoringView() {
                     onDetail={() => setDetailAlert(a)}
                     onReview={() => reviewAlert(a.id)}
                     onDelete={() => deleteAlert(a.id)}
+                    onReply={() => setReplyAlert(a)}
+                    onPin={() => toggleAlertFlag(a, 'is_pinned')}
+                    onArchive={() => toggleAlertFlag(a, 'is_archived')}
                   />
                 ))}
               </div>
@@ -1095,6 +1166,16 @@ export default function KeywordMonitoringView() {
       </div>
 
       {/* Modals */}
+      {replyAlert && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-2xl w-full max-w-md shadow-[var(--shadow-elevated)] p-5" dir="rtl">
+            <div className="flex items-center justify-between mb-4"><h3 className="font-bold flex items-center gap-2"><MessageSquare className="w-4 h-4 text-[var(--brand-primary)]" /> الرد على الخاص</h3><button onClick={() => setReplyAlert(null)}><X className="w-4 h-4 text-[var(--text-muted)]" /></button></div>
+            <div className="rounded-xl bg-[var(--bg-elevated)] p-3 text-sm space-y-1 mb-4"><p>المستلم: <b dir="ltr">{replyAlert.sender_phone}</b></p><p>الحساب المستلم: <b>{replyAlert.account_name || replyAlert.account_id}</b></p><p className="text-xs text-[var(--text-muted)]" dir="auto">{replyAlert.message_text}</p></div>
+            <textarea autoFocus rows={5} className="w-full bg-[var(--bg-elevated)] border border-[var(--border-default)] rounded-xl p-3 text-sm resize-none" placeholder="اكتب الرد..." value={replyBody} onChange={e => setReplyBody(e.target.value)} dir="auto" />
+            <div className="flex gap-2 mt-4"><Button className="flex-1 gap-2" disabled={!replyBody.trim() || replySending} onClick={sendReply}>{replySending ? <RefreshCw className="w-4 h-4 animate-spin" /> : <MessageSquare className="w-4 h-4" />} إرسال الرد</Button><Button variant="outline" onClick={() => setReplyAlert(null)}>إلغاء</Button></div>
+          </div>
+        </div>
+      )}
       {kwModal !== null && (
         <KeywordFormModal
           kw={kwModal === 'new' ? null : kwModal}

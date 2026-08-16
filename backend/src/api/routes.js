@@ -490,6 +490,11 @@ router.get   ('/keywords/stats',        auth, KWController.getStats.bind(KWContr
 router.get   ('/keywords/settings',     auth, KWController.getSettings.bind(KWController));
 router.post  ('/keywords/settings',     auth, KWController.saveSettings.bind(KWController));
 router.get   ('/keywords/activity-log', auth, KWController.getActivityLog.bind(KWController));
+router.get   ('/keywords/notifications', auth, KWController.getNotifications.bind(KWController));
+router.patch ('/keywords/notifications/:id/read', auth, KWController.markNotificationRead.bind(KWController));
+router.get   ('/keywords/health', auth, KWController.getHealth.bind(KWController));
+router.patch ('/keyword-alerts/:id/flag', auth, KWController.setFlag.bind(KWController));
+router.post  ('/keyword-alerts/:id/reply', auth, KWController.sendReply.bind(KWController));
 
 // ══════════════════════════════════════════════════════
 //  TELEGRAM SYSTEM

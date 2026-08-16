@@ -343,16 +343,18 @@ class WhatsAppManager {
                 emit('new_message', { accountId, message: msg });
                 try { require('../api/services/AutoSearchService').ingestMessage(accountId, msg).catch(() => {}); } catch {}
 
-                if (!msg.key?.fromMe && msg.key?.remoteJid?.endsWith('@g.us')) {
+                // Keyword Center v2: persist the event immediately and let the
+                // independent worker analyze it. This is intentionally not gated
+                // by the dashboard or by group-only messages.
+                if (!msg.key?.fromMe) {
                     try {
-                        const acct = await SystemDB.get(
-                            `SELECT user_id FROM accounts WHERE id=$1`, [accountId]
-                        ).catch(() => null);
-                        if (acct?.user_id) {
-                            const KWService = require('../api/services/KeywordMonitoringService');
-                            KWService.processIncomingMessage(accountId, acct.user_id, msg).catch(() => {});
-                        }
-                    } catch {}
+                        const KWService = require('../api/services/KeywordMonitoringService');
+                        KWService.enqueueMessage(accountId, msg).catch(err =>
+                            console.warn(`[KeywordWorker] enqueue failed for ${accountId}: ${err.message}`)
+                        );
+                    } catch (err) {
+                        console.warn(`[KeywordWorker] load failed: ${err.message}`);
+                    }
                 }
             }
         });

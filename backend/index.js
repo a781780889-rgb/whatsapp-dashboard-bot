@@ -336,6 +336,9 @@ async function bootstrap() {
         _registerQueueHandlers();
         await QueueManager.start();
         logger.info('[Phase4] QueueManager started. Queues: wa-campaigns, wa-sync, wa-notifications');
+        const KeywordMonitoringService = require('./src/api/services/KeywordMonitoringService');
+        await KeywordMonitoringService.startWorker();
+        logger.info('[KeywordWorker] Durable keyword processing worker started.');
         await LinkImportService.startWorker();
         logger.info('[LinkImportWorker] Persistent link import worker started.');
         const AutoSearchService = require('./src/api/services/AutoSearchService');
@@ -376,6 +379,7 @@ function setupGracefulShutdown() {
             await JobScheduler.stop();
             // [FIX-20] إيقاف QueueManager قبل RedisManager
             LinkImportService.stopWorker();
+            try { require('./src/api/services/KeywordMonitoringService').stopWorker(); } catch {}
             try { require('./src/api/services/AutoSearchService').stopWorker(); } catch {}
             await QueueManager.stop();
             require('./src/api/services/GroupSyncService').stop();

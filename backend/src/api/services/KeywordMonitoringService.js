@@ -1,364 +1,211 @@
 'use strict';
-/**
- * KeywordMonitoringService
- * خدمة مراقبة الكلمات المفتاحية في رسائل مجموعات واتساب
- */
-const SystemDB  = require('../../database/SystemDB');
+
+const SystemDB = require('../../database/SystemDB');
 const SocketBridge = require('../../core/SocketBridge');
 
-const KeywordMonitoringService = {
+const POLL_MS = 700;
+const MAX_ATTEMPTS = 5;
+let workerTimer = null;
+let heartbeatTimer = null;
+let workerRunning = false;
 
-    // ── إدارة الكلمات المفتاحية ───────────────────────────────────────────
+function normalizeText(value, caseSensitive = false) {
+    let text = String(value || '').normalize('NFKC').replace(/[\u064B-\u065F\u0670]/g, '');
+    text = text.replace(/[\u0640]/g, '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+    return caseSensitive ? text : text.toLocaleLowerCase();
+}
+
+function extractMessageText(msg) {
+    const m = msg?.message || {};
+    return String(
+        m.conversation || m.extendedTextMessage?.text || m.imageMessage?.caption ||
+        m.videoMessage?.caption || m.documentMessage?.caption ||
+        m.buttonsResponseMessage?.selectedDisplayText || m.listResponseMessage?.title || ''
+    ).trim();
+}
+
+function jidPhone(jid = '') {
+    return String(jid).replace(/@s\.whatsapp\.net|@c\.us|@g\.us/g, '').split(':')[0];
+}
+
+function getMessageId(msg) {
+    return msg?.key?.id || `${msg?.key?.remoteJid || 'unknown'}:${msg?.messageTimestamp || Date.now()}`;
+}
+
+function matchesKeyword(keyword, text) {
+    const source = normalizeText(text, !!keyword.case_sensitive);
+    const terms = Array.isArray(keyword.terms) && keyword.terms.length ? keyword.terms : [keyword.word];
+    const values = terms.filter(Boolean).map(term => normalizeText(term, !!keyword.case_sensitive));
+    const type = keyword.match_type || 'contains';
+    if (!values.length) return false;
+    if (type === 'exact') return values.every(v => source === v);
+    if (type === 'starts_with') return values.every(v => source.startsWith(v));
+    if (type === 'ends_with') return values.every(v => source.endsWith(v));
+    if (type === 'multiple' || type === 'all') return values.every(v => source.includes(v));
+    return values.some(v => source.includes(v));
+}
+
+async function broadcast(event, payload) {
+    try { SocketBridge.emit(event, payload); } catch (_) {}
+    try {
+        const { _io } = require('../../index');
+        if (_io) _io.emit(event, payload);
+    } catch (_) {}
+}
+
+const KeywordMonitoringService = {
+    normalizeText,
+    extractMessageText,
 
     async getKeywords(userId) {
-        return await SystemDB.all(
-            `SELECT * FROM kw_keywords WHERE user_id=$1 ORDER BY category, word`,
-            [userId]
-        );
+        return SystemDB.all(`SELECT * FROM kw_keywords WHERE user_id=$1 ORDER BY category, word`, [userId]);
     },
 
-    async addKeyword(userId, { word, category = 'عام', case_sensitive = false, priority = 'normal', color = '#00A884' }) {
-        const existing = await SystemDB.get(
-            `SELECT id FROM kw_keywords WHERE user_id=$1 AND LOWER(word)=LOWER($2)`,
-            [userId, word]
-        );
+    async addKeyword(userId, input = {}) {
+        const word = String(input.word || input.text || '').trim();
+        if (!word) throw new Error('نص الكلمة المفتاحية مطلوب');
+        const terms = Array.isArray(input.terms) ? input.terms.filter(Boolean).map(String) : undefined;
+        const existing = await SystemDB.get(`SELECT id FROM kw_keywords WHERE user_id=$1 AND LOWER(word)=LOWER($2)`, [userId, word]);
         if (existing) throw new Error('الكلمة المفتاحية موجودة بالفعل');
-
-        const row = await SystemDB.get(
-            `INSERT INTO kw_keywords(user_id, word, category, case_sensitive, priority, color)
-             VALUES($1,$2,$3,$4,$5,$6) RETURNING *`,
-            [userId, word.trim(), category, case_sensitive, priority, color]
-        );
-
-        await this._logActivity(userId, 'add_keyword', `تمت إضافة الكلمة: ${word}`);
-        return row;
+        return SystemDB.get(`INSERT INTO kw_keywords
+            (user_id,word,category,case_sensitive,priority,color,match_type,description,notify_enabled,private_reply_enabled,terms)
+            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`, [
+            userId, word, input.category || 'عام', !!input.case_sensitive, input.priority || 'normal', input.color || '#00A884',
+            input.match_type || input.matchType || 'contains', input.description || null,
+            input.notify_enabled !== false, !!input.private_reply_enabled, terms ? JSON.stringify(terms) : null,
+        ]);
     },
 
-    async updateKeyword(userId, keywordId, updates) {
-        const fields = [];
-        const values = [];
-        let idx = 1;
-
-        if (updates.word       !== undefined) { fields.push(`word=$${idx++}`);           values.push(updates.word.trim()); }
-        if (updates.category   !== undefined) { fields.push(`category=$${idx++}`);       values.push(updates.category); }
-        if (updates.case_sensitive !== undefined) { fields.push(`case_sensitive=$${idx++}`); values.push(updates.case_sensitive); }
-        if (updates.priority   !== undefined) { fields.push(`priority=$${idx++}`);       values.push(updates.priority); }
-        if (updates.color      !== undefined) { fields.push(`color=$${idx++}`);          values.push(updates.color); }
-        if (updates.is_active  !== undefined) { fields.push(`is_active=$${idx++}`);      values.push(updates.is_active); }
-
+    async updateKeyword(userId, id, updates = {}) {
+        const allowed = { word:'word', category:'category', case_sensitive:'case_sensitive', priority:'priority', color:'color', is_active:'is_active', match_type:'match_type', description:'description', notify_enabled:'notify_enabled', private_reply_enabled:'private_reply_enabled' };
+        const fields = []; const values = []; let i = 1;
+        for (const [key, column] of Object.entries(allowed)) if (updates[key] !== undefined) { fields.push(`${column}=$${i++}`); values.push(key === 'word' ? String(updates[key]).trim() : updates[key]); }
+        if (Array.isArray(updates.terms)) { fields.push(`terms=$${i++}`); values.push(JSON.stringify(updates.terms)); }
         if (!fields.length) throw new Error('لا توجد تحديثات');
-        fields.push(`updated_at=NOW()`);
-        values.push(keywordId, userId);
-
-        const row = await SystemDB.get(
-            `UPDATE kw_keywords SET ${fields.join(',')} WHERE id=$${idx++} AND user_id=$${idx} RETURNING *`,
-            values
-        );
+        fields.push('updated_at=NOW()'); values.push(id, userId);
+        const row = await SystemDB.get(`UPDATE kw_keywords SET ${fields.join(',')} WHERE id=$${i++} AND user_id=$${i} RETURNING *`, values);
         if (!row) throw new Error('الكلمة غير موجودة');
-
-        await this._logActivity(userId, 'edit_keyword', `تم تعديل الكلمة: ${row.word}`);
         return row;
     },
 
-    async deleteKeyword(userId, keywordId) {
-        const row = await SystemDB.get(
-            `DELETE FROM kw_keywords WHERE id=$1 AND user_id=$2 RETURNING word`,
-            [keywordId, userId]
-        );
+    async deleteKeyword(userId, id) {
+        const row = await SystemDB.get(`DELETE FROM kw_keywords WHERE id=$1 AND user_id=$2 RETURNING word`, [id, userId]);
         if (!row) throw new Error('الكلمة غير موجودة');
-        await this._logActivity(userId, 'delete_keyword', `تم حذف الكلمة: ${row.word}`);
         return { success: true };
     },
 
-    // ── التنبيهات ─────────────────────────────────────────────────────────
-
-    async getAlerts(userId, { page = 1, limit = 20, keyword, group_name, status, phone, date_from, date_to } = {}) {
-        const offset = (page - 1) * limit;
-        const conditions = ['a.user_id=$1'];
-        const values = [userId];
-        let idx = 2;
-
-        if (keyword) {
-            conditions.push(`LOWER(a.matched_keyword) LIKE LOWER($${idx++})`);
-            values.push(`%${keyword}%`);
-        }
-        if (group_name) {
-            conditions.push(`LOWER(a.group_name) LIKE LOWER($${idx++})`);
-            values.push(`%${group_name}%`);
-        }
-        if (status) {
-            conditions.push(`a.status=$${idx++}`);
-            values.push(status);
-        }
-        if (phone) {
-            conditions.push(`a.sender_phone LIKE $${idx++}`);
-            values.push(`%${phone}%`);
-        }
-        if (date_from) {
-            conditions.push(`a.message_time >= $${idx++}`);
-            values.push(new Date(date_from));
-        }
-        if (date_to) {
-            conditions.push(`a.message_time <= $${idx++}`);
-            values.push(new Date(date_to));
-        }
-
-        const where = conditions.join(' AND ');
-
-        const total = await SystemDB.get(
-            `SELECT COUNT(*) FROM kw_alerts a WHERE ${where}`,
-            values
-        );
-
-        values.push(limit, offset);
-        const rows = await SystemDB.all(
-            `SELECT a.*, k.color as keyword_color, k.priority as keyword_priority
-             FROM kw_alerts a
-             LEFT JOIN kw_keywords k ON k.id=a.keyword_id
-             WHERE ${where}
-             ORDER BY a.message_time DESC
-             LIMIT $${idx++} OFFSET $${idx}`,
-            values
-        );
-
-        return {
-            alerts: rows,
-            total: parseInt(total?.count || 0),
-            page,
-            pages: Math.ceil(parseInt(total?.count || 0) / limit),
-        };
+    async getAlerts(userId, options = {}) {
+        const page = Math.max(1, Number(options.page) || 1), limit = Math.min(100, Math.max(1, Number(options.limit) || 30));
+        const where = ['a.user_id=$1']; const values = [userId]; let i = 2;
+        const add = (sql, value) => { where.push(sql.replace('?', `$${i++}`)); values.push(value); };
+        if (options.keyword) add(`LOWER(a.matched_keyword) LIKE LOWER(?)`, `%${options.keyword}%`);
+        if (options.phone) add(`a.sender_phone LIKE ?`, `%${options.phone}%`);
+        if (options.group_name) add(`LOWER(COALESCE(a.group_name,'')) LIKE LOWER(?)`, `%${options.group_name}%`);
+        if (options.status) add(`a.status=?`, options.status);
+        if (options.account_id) add(`a.account_id=?`, options.account_id);
+        if (options.is_archived === 'false' || options.is_archived === false) where.push('COALESCE(a.is_archived,FALSE)=FALSE');
+        if (options.date_from) add(`a.message_time>=?`, new Date(options.date_from));
+        if (options.date_to) add(`a.message_time<=?`, new Date(options.date_to));
+        const clause = where.join(' AND ');
+        const total = await SystemDB.get(`SELECT COUNT(*) FROM kw_alerts a WHERE ${clause}`, values);
+        const count = Number(total?.count || 0); values.push(limit, (page - 1) * limit);
+        const alerts = await SystemDB.all(`SELECT a.*,k.color keyword_color,k.priority keyword_priority,acc.name account_name,acc.phone_number account_phone
+            FROM kw_alerts a LEFT JOIN kw_keywords k ON k.id=a.keyword_id LEFT JOIN accounts acc ON acc.id=a.account_id
+            WHERE ${clause} ORDER BY COALESCE(a.is_pinned,FALSE) DESC,a.message_time DESC LIMIT $${i++} OFFSET $${i}`, values);
+        return { alerts, total: count, page, pages: Math.ceil(count / limit) };
     },
 
-    async updateAlertStatus(userId, alertId, status, note = null) {
-        const row = await SystemDB.get(
-            `UPDATE kw_alerts SET status=$1, internal_note=COALESCE($2,internal_note), updated_at=NOW()
-             WHERE id=$3 AND user_id=$4 RETURNING *`,
-            [status, note, alertId, userId]
-        );
-        if (!row) throw new Error('التنبيه غير موجود');
-        await this._logActivity(userId, status === 'reviewed' ? 'review_alert' : 'update_alert',
-            `تم تحديث تنبيه: ${row.matched_keyword}`);
-        return row;
-    },
-
-    async deleteAlert(userId, alertId) {
-        const row = await SystemDB.get(
-            `DELETE FROM kw_alerts WHERE id=$1 AND user_id=$2 RETURNING matched_keyword`,
-            [alertId, userId]
-        );
-        if (!row) throw new Error('التنبيه غير موجود');
-        await this._logActivity(userId, 'delete_alert', `تم حذف تنبيه: ${row.matched_keyword}`);
-        return { success: true };
-    },
-
-    async addAlertNote(userId, alertId, note) {
-        const row = await SystemDB.get(
-            `UPDATE kw_alerts SET internal_note=$1, updated_at=NOW() WHERE id=$2 AND user_id=$3 RETURNING *`,
-            [note, alertId, userId]
-        );
+    async updateAlertStatus(userId, id, status, note = null) {
+        const row = await SystemDB.get(`UPDATE kw_alerts SET status=$1,internal_note=COALESCE($2,internal_note),updated_at=NOW() WHERE id=$3 AND user_id=$4 RETURNING *`, [status, note, id, userId]);
         if (!row) throw new Error('التنبيه غير موجود');
         return row;
     },
-
-    // ── الإحصائيات ────────────────────────────────────────────────────────
+    async deleteAlert(userId, id) { const row = await SystemDB.get(`DELETE FROM kw_alerts WHERE id=$1 AND user_id=$2 RETURNING id`, [id,userId]); if (!row) throw new Error('التنبيه غير موجود'); return { success:true }; },
+    async addAlertNote(userId,id,note) { return this.updateAlertStatus(userId,id,'reviewed',note); },
+    async setAlertFlag(userId,id,field,value) { if (!['is_pinned','is_archived'].includes(field)) throw new Error('حقل غير مسموح'); return SystemDB.get(`UPDATE kw_alerts SET ${field}=$1,updated_at=NOW() WHERE id=$2 AND user_id=$3 RETURNING *`,[!!value,id,userId]); },
 
     async getStats(userId) {
-        const [kwCount, todayCount, weekCount, topKeywords, topGroups, topSenders] = await Promise.all([
-            SystemDB.get(`SELECT COUNT(*) FROM kw_keywords WHERE user_id=$1 AND is_active=TRUE`, [userId]),
-            SystemDB.get(`SELECT COUNT(*) FROM kw_alerts WHERE user_id=$1 AND message_time >= NOW()-INTERVAL '1 day'`, [userId]),
-            SystemDB.get(`SELECT COUNT(*) FROM kw_alerts WHERE user_id=$1 AND message_time >= NOW()-INTERVAL '7 days'`, [userId]),
-            SystemDB.all(
-                `SELECT matched_keyword, COUNT(*) as cnt FROM kw_alerts
-                 WHERE user_id=$1 AND message_time >= NOW()-INTERVAL '7 days'
-                 GROUP BY matched_keyword ORDER BY cnt DESC LIMIT 5`,
-                [userId]
-            ),
-            SystemDB.all(
-                `SELECT group_name, COUNT(*) as cnt FROM kw_alerts
-                 WHERE user_id=$1 AND message_time >= NOW()-INTERVAL '7 days'
-                 GROUP BY group_name ORDER BY cnt DESC LIMIT 5`,
-                [userId]
-            ),
-            SystemDB.all(
-                `SELECT sender_name, sender_phone, COUNT(*) as cnt FROM kw_alerts
-                 WHERE user_id=$1 AND message_time >= NOW()-INTERVAL '7 days'
-                 GROUP BY sender_name, sender_phone ORDER BY cnt DESC LIMIT 5`,
-                [userId]
-            ),
+        const [keywords, today, chats, accounts, unread, replies] = await Promise.all([
+            SystemDB.get(`SELECT COUNT(*) FROM kw_keywords WHERE user_id=$1`, [userId]),
+            SystemDB.get(`SELECT COUNT(*) FROM kw_alerts WHERE user_id=$1 AND message_time>=CURRENT_DATE`, [userId]),
+            SystemDB.get(`SELECT COUNT(DISTINCT COALESCE(sender_phone,group_jid)) FROM kw_alerts WHERE user_id=$1`, [userId]),
+            SystemDB.get(`SELECT COUNT(*) FROM accounts WHERE user_id=$1 AND status='connected'`, [userId]),
+            SystemDB.get(`SELECT COUNT(*) FROM kw_notifications WHERE user_id=$1 AND is_read=FALSE`, [userId]),
+            SystemDB.get(`SELECT COUNT(*) FROM kw_replies WHERE user_id=$1 AND status='sent'`, [userId]),
         ]);
-
-        // مخطط بياني — آخر 7 أيام
-        const dailyChart = await SystemDB.all(
-            `SELECT DATE_TRUNC('day', message_time) as day, COUNT(*) as cnt
-             FROM kw_alerts WHERE user_id=$1 AND message_time >= NOW()-INTERVAL '7 days'
-             GROUP BY day ORDER BY day`,
-            [userId]
-        );
-
-        return {
-            keywords_count: parseInt(kwCount?.count || 0),
-            today_count:    parseInt(todayCount?.count || 0),
-            week_count:     parseInt(weekCount?.count || 0),
-            top_keywords:   topKeywords,
-            top_groups:     topGroups,
-            top_senders:    topSenders,
-            daily_chart:    dailyChart,
-        };
+        return { keywords_count:Number(keywords?.count||0), today_count:Number(today?.count||0), matched_chats:Number(chats?.count||0), active_accounts:Number(accounts?.count||0), unread_notifications:Number(unread?.count||0), replies_sent:Number(replies?.count||0), top_keywords:await SystemDB.all(`SELECT matched_keyword,COUNT(*) cnt FROM kw_alerts WHERE user_id=$1 GROUP BY matched_keyword ORDER BY cnt DESC LIMIT 5`,[userId]) };
     },
 
-    // ── الإعدادات ─────────────────────────────────────────────────────────
+    _defaultSettings() { return { monitoring_enabled:true, notifications_enabled:true, sound_enabled:true, scan_groups:true, scan_private:true, account_ids:[], log_retention_days:90 }; },
+    async getSettings(userId) { const row=await SystemDB.get(`SELECT settings FROM kw_settings WHERE user_id=$1`,[userId]); return row?.settings || this._defaultSettings(); },
+    async saveSettings(userId,settings) { const merged={...this._defaultSettings(),...(settings||{})}; await SystemDB.run(`INSERT INTO kw_settings(user_id,settings) VALUES($1,$2) ON CONFLICT(user_id) DO UPDATE SET settings=$2,updated_at=NOW()`,[userId,JSON.stringify(merged)]); return merged; },
+    async getActivityLog(userId,limit=100) { return SystemDB.all(`SELECT * FROM kw_activity_log WHERE user_id=$1 ORDER BY created_at DESC LIMIT $2`,[userId,Math.min(500,Number(limit)||100)]); },
+    async exportKeywords(userId) { return SystemDB.all(`SELECT word,terms,match_type,category,priority,color,case_sensitive,description,notify_enabled,private_reply_enabled FROM kw_keywords WHERE user_id=$1 ORDER BY word`,[userId]); },
+    async importKeywords(userId,keywords) { let added=0; for(const k of keywords||[]) { try { await this.addKeyword(userId,k); added++; } catch(_) {} } return {added}; },
 
-    async getSettings(userId) {
-        const row = await SystemDB.get(
-            `SELECT settings FROM kw_settings WHERE user_id=$1`, [userId]
-        );
-        return row?.settings || this._defaultSettings();
+    async enqueueMessage(accountId, msg) {
+        if (!msg?.message || msg.key?.fromMe) return null;
+        const acct = await SystemDB.get(`SELECT user_id FROM accounts WHERE id=$1`, [accountId]);
+        if (!acct?.user_id) return null;
+        const remote = msg.key?.remoteJid || ''; const isGroup = remote.endsWith('@g.us');
+        const settings = await this.getSettings(acct.user_id); if (!settings.monitoring_enabled || (isGroup && settings.scan_groups===false) || (!isGroup && settings.scan_private===false)) return null;
+        const id = getMessageId(msg); const text = extractMessageText(msg); if (!text) return null;
+        await SystemDB.run(`INSERT INTO kw_event_queue(user_id,account_id,message_id,payload) VALUES($1,$2,$3,$4) ON CONFLICT(account_id,message_id,event_type) DO NOTHING`, [acct.user_id,accountId,id,JSON.stringify(msg)]);
+        await SystemDB.run(`INSERT INTO kw_service_health(account_id,user_id,status,last_event_at,updated_at) VALUES($1,$2,'connected',NOW(),NOW()) ON CONFLICT(account_id) DO UPDATE SET user_id=$2,last_event_at=NOW(),updated_at=NOW()`,[accountId,acct.user_id]);
+        return id;
     },
 
-    async saveSettings(userId, settings) {
-        await SystemDB.run(
-            `INSERT INTO kw_settings(user_id, settings) VALUES($1,$2)
-             ON CONFLICT(user_id) DO UPDATE SET settings=$2, updated_at=NOW()`,
-            [userId, JSON.stringify(settings)]
-        );
-        return settings;
+    async processIncomingMessage(accountId, userId, msg) { return this.enqueueMessage(accountId,msg); },
+
+    async _processQueueJob(job) {
+        const msg=job.payload||{}; const text=extractMessageText(msg); const remote=msg.key?.remoteJid||''; const group=remote.endsWith('@g.us');
+        await SystemDB.run(`INSERT INTO kw_messages(user_id,account_id,message_id,remote_jid,participant_jid,sender_phone,sender_name,chat_name,message_text,is_group,message_time,raw_payload) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(account_id,message_id) DO NOTHING`,[job.user_id,job.account_id,job.message_id,remote,msg.key?.participant||null,jidPhone(msg.key?.participant||remote),msg.pushName||jidPhone(msg.key?.participant||remote),group?remote:msg.pushName||jidPhone(remote),text,group,new Date(Number(msg.messageTimestamp||Date.now()/1000)*1000),JSON.stringify(msg)]);
+        const keywords=await SystemDB.all(`SELECT * FROM kw_keywords WHERE user_id=$1 AND is_active=TRUE`,[job.user_id]);
+        for(const kw of keywords) if(matchesKeyword(kw,text)) {
+            const alert=await SystemDB.get(`INSERT INTO kw_alerts(user_id,keyword_id,matched_keyword,message_id,message_text,sender_name,sender_phone,group_name,group_jid,account_id,message_time,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'new') ON CONFLICT(account_id,message_id,keyword_id) WHERE message_id IS NOT NULL DO NOTHING RETURNING *`,[job.user_id,kw.id,kw.word,job.message_id,text,msg.pushName||jidPhone(msg.key?.participant||remote),jidPhone(msg.key?.participant||remote),group?remote:null,group?remote:null,job.account_id,new Date(Number(msg.messageTimestamp||Date.now()/1000)*1000)]);
+            if(!alert) continue;
+            await SystemDB.run(`UPDATE kw_keywords SET match_count=COALESCE(match_count,0)+1,updated_at=NOW() WHERE id=$1`,[kw.id]);
+            let notification=null; if(kw.notify_enabled!==false) notification=await SystemDB.get(`INSERT INTO kw_notifications(user_id,alert_id,title,body) VALUES($1,$2,$3,$4) RETURNING *`,[job.user_id,alert.id,'تم اكتشاف كلمة مفتاحية',`${kw.word} — ${text}`]);
+            const payload={...alert,keyword_color:kw.color,keyword_priority:kw.priority,notification_id:notification?.id||null};
+            await broadcast('keyword_alert',{userId:job.user_id,alert:payload});
+            if(notification) await broadcast('keyword_notification',{userId:job.user_id,notification,alert:payload});
+        }
     },
 
-    _defaultSettings() {
-        return {
-            monitoring_enabled: true,
-            notifications_enabled: true,
-            sound_enabled: true,
-            sound_type: 'default',
-            log_retention_days: 30,
-        };
-    },
-
-    // ── سجل النشاط ───────────────────────────────────────────────────────
-
-    async getActivityLog(userId, limit = 50) {
-        return await SystemDB.all(
-            `SELECT * FROM kw_activity_log WHERE user_id=$1 ORDER BY created_at DESC LIMIT $2`,
-            [userId, limit]
-        );
-    },
-
-    async _logActivity(userId, action, details) {
-        await SystemDB.run(
-            `INSERT INTO kw_activity_log(user_id, action, details) VALUES($1,$2,$3)`,
-            [userId, action, details]
-        ).catch(() => {});
-    },
-
-    // ── كشف الكلمات المفتاحية في الرسائل ─────────────────────────────────
-
-    async processIncomingMessage(accountId, userId, msg) {
+    async _claimAndProcess() {
+        if(workerRunning) return; workerRunning=true;
         try {
-            const settings = await this.getSettings(userId);
-            if (!settings.monitoring_enabled) return;
-
-            const keywords = await SystemDB.all(
-                `SELECT * FROM kw_keywords WHERE user_id=$1 AND is_active=TRUE`, [userId]
-            );
-            if (!keywords.length) return;
-
-            // استخراج نص الرسالة
-            const m = msg.message;
-            const text = (
-                m?.conversation ||
-                m?.extendedTextMessage?.text ||
-                m?.imageMessage?.caption ||
-                m?.videoMessage?.caption ||
-                m?.documentMessage?.caption ||
-                m?.buttonsResponseMessage?.selectedDisplayText ||
-                m?.listResponseMessage?.title ||
-                ''
-            ).trim();
-
-            if (!text) return;
-
-            // التحقق من أن الرسالة من مجموعة
-            const remoteJid = msg.key?.remoteJid || '';
-            const isGroup = remoteJid.endsWith('@g.us');
-            if (!isGroup) return;
-
-            // اسم المرسل ورقمه
-            const participantJid = msg.key?.participant || '';
-            const senderPhone = participantJid.replace('@s.whatsapp.net', '').replace('@c.us', '');
-            const senderName  = msg.pushName || senderPhone;
-            const groupName   = remoteJid; // سيُستبدل باسم حقيقي لاحقاً إن أمكن
-
-            // فحص كل كلمة مفتاحية
-            for (const kw of keywords) {
-                const word   = kw.word;
-                const flags  = kw.case_sensitive ? 'g' : 'gi';
-                let matched  = false;
-                try {
-                    matched = new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, flags).test(text);
-                } catch {
-                    matched = kw.case_sensitive
-                        ? text.includes(word)
-                        : text.toLowerCase().includes(word.toLowerCase());
-                }
-
-                if (!matched) continue;
-
-                // حفظ التنبيه
-                const alert = await SystemDB.get(
-                    `INSERT INTO kw_alerts(
-                        user_id, keyword_id, matched_keyword,
-                        message_text, sender_name, sender_phone,
-                        group_name, group_jid, account_id,
-                        message_time, status
-                     ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'new') RETURNING *`,
-                    [
-                        userId, kw.id, word,
-                        text, senderName, senderPhone,
-                        groupName, remoteJid, accountId,
-                        new Date(msg.messageTimestamp * 1000),
-                    ]
-                );
-
-                // تحديث عداد المطابقات
-                await SystemDB.run(
-                    `UPDATE kw_keywords SET match_count=match_count+1 WHERE id=$1`, [kw.id]
-                ).catch(() => {});
-
-                // بث Socket.IO
-                const payload = {
-                    ...alert,
-                    keyword_color:    kw.color,
-                    keyword_priority: kw.priority,
-                };
-                SocketBridge.emit('keyword_alert', { userId, alert: payload });
-                try {
-                    const { _io } = require('../../index');
-                    if (_io) _io.emit('keyword_alert', { userId, alert: payload });
-                } catch {}
-            }
-        } catch (err) {
-            console.error('[KWMonitor] processIncomingMessage error:', err.message);
-        }
+            const job=await SystemDB.get(`WITH next_job AS (SELECT id FROM kw_event_queue WHERE status IN ('received','retry') AND available_at<=NOW() ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED) UPDATE kw_event_queue q SET status='processing',locked_at=NOW(),attempts=q.attempts+1 FROM next_job WHERE q.id=next_job.id RETURNING q.*`);
+            if(!job) return;
+            try { await this._processQueueJob(job); await SystemDB.run(`UPDATE kw_event_queue SET status='completed',processed_at=NOW(),last_error=NULL WHERE id=$1`,[job.id]); }
+            catch(err) { const failed=Number(job.attempts)>=MAX_ATTEMPTS; await SystemDB.run(`UPDATE kw_event_queue SET status=$1,available_at=NOW()+($2 || ' seconds')::interval,last_error=$3 WHERE id=$4`,[failed?'failed':'retry',Math.min(60,2**Number(job.attempts)),err.message,job.id]); }
+        } finally { workerRunning=false; }
     },
 
-    // ── تصدير الكلمات المفتاحية ───────────────────────────────────────────
-
-    async exportKeywords(userId) {
-        const rows = await SystemDB.all(
-            `SELECT word, category, priority, color, case_sensitive FROM kw_keywords WHERE user_id=$1`, [userId]
-        );
-        return rows;
+    async startWorker() {
+        if(workerTimer) return;
+        await SystemDB.run(`UPDATE kw_event_queue SET status='retry',available_at=NOW() WHERE status='processing'`).catch(()=>{});
+        workerTimer=setInterval(()=>this._claimAndProcess().catch(()=>{}),POLL_MS); workerTimer.unref?.();
+        heartbeatTimer=setInterval(()=>SystemDB.run(`UPDATE kw_service_health h SET last_heartbeat=NOW(),status=CASE WHEN EXISTS (SELECT 1 FROM accounts a WHERE a.id=h.account_id AND a.status='connected') THEN 'connected' ELSE 'disconnected' END,updated_at=NOW() WHERE h.status NOT IN ('stopped')`).catch(()=>{}),5000); heartbeatTimer.unref?.();
+        console.log('[KeywordWorker] Persistent durable worker started.');
     },
+    stopWorker() { if(workerTimer) clearInterval(workerTimer); if(heartbeatTimer) clearInterval(heartbeatTimer); workerTimer=null; heartbeatTimer=null; },
 
-    async importKeywords(userId, keywords) {
-        let added = 0;
-        for (const kw of keywords) {
-            try {
-                await this.addKeyword(userId, kw);
-                added++;
-            } catch { /* تجاهل التكرار */ }
-        }
-        return { added };
+    async getNotifications(userId, options={}) { const limit=Math.min(100,Number(options.limit)||50); return SystemDB.all(`SELECT n.*,a.matched_keyword,a.message_text,a.sender_phone FROM kw_notifications n LEFT JOIN kw_alerts a ON a.id=n.alert_id WHERE n.user_id=$1 ORDER BY n.created_at DESC LIMIT $2`,[userId,limit]); },
+    async markNotificationRead(userId,id) { return SystemDB.get(`UPDATE kw_notifications SET is_read=TRUE,read_at=NOW() WHERE id=$1 AND user_id=$2 RETURNING *`,[id,userId]); },
+    async getHealth(userId) { return SystemDB.all(`SELECT a.id account_id,a.user_id,a.name account_name,a.phone_number account_phone,a.status account_status,COALESCE(h.status,CASE WHEN a.status='connected' THEN 'connected' ELSE 'disconnected' END) status,h.last_heartbeat,h.last_event_at,h.last_error,COALESCE(h.updated_at,a.updated_at) updated_at FROM accounts a LEFT JOIN kw_service_health h ON h.account_id=a.id WHERE a.user_id=$1 ORDER BY a.name`,[userId]); },
+
+    async sendReply(userId,alertId,body) {
+        if(!String(body||'').trim()) throw new Error('نص الرد مطلوب');
+        const alert=await SystemDB.get(`SELECT * FROM kw_alerts WHERE id=$1 AND user_id=$2`,[alertId,userId]); if(!alert) throw new Error('التنبيه غير موجود');
+        const jid=alert.group_jid && alert.group_jid.endsWith('@g.us') ? (alert.sender_phone ? `${alert.sender_phone}@s.whatsapp.net` : null) : `${alert.sender_phone}@s.whatsapp.net`;
+        if(!jid || jidPhone(jid)==='') throw new Error('رقم المستلم غير متوفر');
+        const reply=await SystemDB.get(`INSERT INTO kw_replies(user_id,alert_id,account_id,recipient_jid,body) VALUES($1,$2,$3,$4,$5) RETURNING *`,[userId,alertId,alert.account_id,jid,String(body).trim()]);
+        try {
+            const WAM=require('../../bot/WhatsAppManager'); const result=await WAM.sendMessageSafe(alert.account_id,jid,{text:String(body).trim()},{operationType:'keyword_reply',taskId:String(reply.id)});
+            const sent=await SystemDB.get(`UPDATE kw_replies SET status='sent',whatsapp_message_id=$1,sent_at=NOW() WHERE id=$2 RETURNING *`,[result?.key?.id||null,reply.id]);
+            await SystemDB.run(`UPDATE kw_alerts SET status='replied',updated_at=NOW() WHERE id=$1`,[alertId]); await broadcast('keyword_reply_sent',{userId,reply:sent,alertId}); return sent;
+        } catch(err) { await SystemDB.run(`UPDATE kw_replies SET status='failed',error=$1 WHERE id=$2`,[err.message,reply.id]); throw new Error(`فشل إرسال الرد: ${err.message}`); }
     },
 };
 
