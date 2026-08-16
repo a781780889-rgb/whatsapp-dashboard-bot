@@ -357,6 +357,12 @@ class WhatsAppManager {
             }
         });
 
+        sock.ev.on('messaging-history.set', async (payload) => {
+            try {
+                require('../api/services/AutoSearchService').ingestHistory(accountId, payload).catch(() => {});
+            } catch {}
+        });
+
         // [PRIVATE-SEND-ACK-TRACKING] هذا المستمع آمن بالتصميم لأنه لا يفعل
         // شيئاً إلا لو كان messageId موجوداً فعلاً في _pendingPrivateAcks —
         // أي رسالة لم تُسجَّل هناك (كل رسائل المجموعات، وأي رسالة خاصة انتهت
