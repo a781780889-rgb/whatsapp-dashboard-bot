@@ -122,6 +122,36 @@ const TelegramMigrations = {
             ];
             for (const idx of keywordIndexes) await query(idx).catch(() => {});
 
+            // ── تنظيف ومنع تكرار حسابات Telegram ─────────────────────────
+            // احتفظ بالحساب الأحدث عند وجود تكرارات قديمة، ثم أضف قيوداً جزئية
+            // تسمح بالحسابات القديمة التي لا تحتوي على معرف Telegram بعد.
+            await query(`
+                WITH ranked AS (
+                    SELECT id, ROW_NUMBER() OVER (
+                        PARTITION BY user_id, telegram_user_id
+                        ORDER BY last_connected_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
+                    ) AS rn
+                    FROM telegram_accounts
+                    WHERE user_id IS NOT NULL AND telegram_user_id IS NOT NULL AND telegram_user_id <> ''
+                )
+                DELETE FROM telegram_accounts a USING ranked r
+                WHERE a.id = r.id AND r.rn > 1
+            `).catch(() => {});
+            await query(`
+                WITH ranked AS (
+                    SELECT id, ROW_NUMBER() OVER (
+                        PARTITION BY user_id, phone_number
+                        ORDER BY last_connected_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
+                    ) AS rn
+                    FROM telegram_accounts
+                    WHERE user_id IS NOT NULL AND phone_number IS NOT NULL AND phone_number <> ''
+                )
+                DELETE FROM telegram_accounts a USING ranked r
+                WHERE a.id = r.id AND r.rn > 1
+            `).catch(() => {});
+            await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_tg_accounts_user_telegram_unique ON telegram_accounts(user_id,telegram_user_id) WHERE user_id IS NOT NULL AND telegram_user_id IS NOT NULL AND telegram_user_id <> ''`).catch(() => {});
+            await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_tg_accounts_user_phone_unique ON telegram_accounts(user_id,phone_number) WHERE user_id IS NOT NULL AND phone_number IS NOT NULL AND phone_number <> ''`).catch(() => {});
+
             // ── Indexes للأداء ────────────────────────────────────────────
             const indexes = [
                 `CREATE INDEX IF NOT EXISTS idx_whatsapp_links_status ON whatsapp_links(status)`,
