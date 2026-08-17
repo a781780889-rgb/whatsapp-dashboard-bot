@@ -263,7 +263,7 @@ class GroupJoinerService {
     _extractInviteCode(link) {
         if (!link) return null;
         const patterns = [
-            /chat\.whatsapp\.com\/([A-Za-z0-9_-]{20,})/,
+            /chat\.whatsapp\.com\/([A-Za-z0-9_-]{6,})/,
             /whatsapp\.com\/invite\/([A-Za-z0-9_-]+)/,
         ];
         for (const p of patterns) {

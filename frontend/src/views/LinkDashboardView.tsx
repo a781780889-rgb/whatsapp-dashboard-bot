@@ -27,10 +27,13 @@ interface DiscoveredLink {
   link_type: string;
   group_jid?: string;
   discovered_by_account?: string;
-  status: 'new' | 'joined' | 'failed' | 'disabled' | 'blocked';
+  status: string;
   join_account_used?: string;
   joined_at?: string;
   join_fail_reason?: string;
+  error_code?: string;
+  error_category?: string;
+  retryable?: boolean;
   join_attempts: number;
   discovered_at: string;
 }
@@ -68,6 +71,12 @@ interface DiscoveredStats {
   byType: { link_type: string; cnt: number }[];
   joinedToday: number;
   failedToday: number;
+  alreadyJoined?: number;
+  retryPending?: number;
+  invalidLink?: number;
+  accountError?: number;
+  temporaryError?: number;
+  rateLimited?: number;
   scan: ScanJob;
 }
 
@@ -90,11 +99,24 @@ const LINK_TYPE_CFG: Record<string, { label: string; color: string; icon: string
 };
 
 const STATUS_CFG: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
-  new:      { label: 'جديد',        color: 'text-blue-400',   icon: <AlertCircle className="w-3 h-3" /> },
-  joined:   { label: 'تم الانضمام', color: 'text-green-400',  icon: <CheckCircle2 className="w-3 h-3" /> },
-  failed:   { label: 'فشل',         color: 'text-red-400',    icon: <XCircle className="w-3 h-3" /> },
-  disabled: { label: 'معطل',        color: 'text-yellow-400', icon: <PauseCircle className="w-3 h-3" /> },
-  blocked:  { label: 'محظور',       color: 'text-orange-400', icon: <StopCircle className="w-3 h-3" /> },
+  new:               { label: 'جاهز للمعالجة',       color: 'text-blue-400',   icon: <AlertCircle className="w-3 h-3" /> },
+  queued:            { label: 'في قائمة الانتظار',    color: 'text-indigo-400', icon: <Clock className="w-3 h-3" /> },
+  joining:           { label: 'جاري محاولة الانضمام', color: 'text-cyan-400',   icon: <RefreshCw className="w-3 h-3 animate-spin" /> },
+  joined:            { label: 'تم الانضمام',          color: 'text-green-400',  icon: <CheckCircle2 className="w-3 h-3" /> },
+  already_joined:    { label: 'منضم مسبقًا',          color: 'text-emerald-300',icon: <CheckCircle2 className="w-3 h-3" /> },
+  retry_pending:    { label: 'تحتاج إعادة محاولة',   color: 'text-amber-400',  icon: <RotateCcw className="w-3 h-3" /> },
+  invalid_link:     { label: 'رابط غير صالح',        color: 'text-red-400',    icon: <XCircle className="w-3 h-3" /> },
+  unsupported_link: { label: 'نوع رابط غير مدعوم',   color: 'text-orange-300', icon: <AlertCircle className="w-3 h-3" /> },
+  expired_link:     { label: 'رابط منتهي/غير متاح',  color: 'text-red-300',    icon: <XCircle className="w-3 h-3" /> },
+  account_error:    { label: 'الحساب غير جاهز',      color: 'text-orange-400', icon: <WifiOff className="w-3 h-3" /> },
+  account_restricted:{ label: 'الحساب مقيد',         color: 'text-red-300',    icon: <StopCircle className="w-3 h-3" /> },
+  rate_limited:     { label: 'تقييد مؤقت',            color: 'text-amber-300',  icon: <Clock className="w-3 h-3" /> },
+  temporary_error:  { label: 'خطأ مؤقت',              color: 'text-amber-400',  icon: <RotateCcw className="w-3 h-3" /> },
+  network_error:    { label: 'خطأ شبكة',              color: 'text-amber-300',  icon: <WifiOff className="w-3 h-3" /> },
+  join_failed:      { label: 'فشل الانضمام',          color: 'text-red-400',    icon: <XCircle className="w-3 h-3" /> },
+  failed:           { label: 'فشل غير مصنف',          color: 'text-red-400',    icon: <XCircle className="w-3 h-3" /> },
+  disabled:         { label: 'معطل',                  color: 'text-yellow-400', icon: <PauseCircle className="w-3 h-3" /> },
+  blocked:          { label: 'محظور',                 color: 'text-orange-400', icon: <StopCircle className="w-3 h-3" /> },
 };
 
 const DELAY_OPTIONS = [
@@ -254,6 +276,11 @@ export default function LinkDashboardView({ accountId }: { accountId: string | n
       if (payload?.accountId && String(payload.accountId) !== String(accountId)) return;
       setScanJob((current: any) => ({ ...(current || {}), ...payload, log: payload.lastLog ? [...(current?.log || []), payload.lastLog].slice(-100) : (current?.log || []) }));
       if (['finished', 'stopped', 'error'].includes(payload?.status)) { fetchLinks(); fetchStats(); }
+    });
+    socket.on(`link_join_${accountId}`, (payload: any) => {
+      setScanRealtime('connected');
+      if (payload?.lastUrl || payload?.result) { fetchLinks(); fetchStats(); }
+      if (payload?.status === 'finished') { fetchLinks(); fetchStats(); setJoinRunning(false); }
     });
     return () => { socket.disconnect(); scanSocketRef.current = null; setScanRealtime('offline'); };
   }, [accountId, fetchScanStatus, fetchStats, fetchLinks]);
@@ -587,13 +614,14 @@ export default function LinkDashboardView({ accountId }: { accountId: string | n
       {/* ── بطاقات الإحصائيات ─────────────────────────────────────── */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2 flex-shrink-0">
         {[
-          { label: 'إجمالي',       value: stats?.total    ?? '…', color: 'text-blue-400',   bg: 'bg-blue-400/10'   },
-          { label: 'جديد',          value: stats?.new      ?? '…', color: 'text-sky-400',    bg: 'bg-sky-400/10'    },
-          { label: 'تم الانضمام',   value: stats?.joined   ?? '…', color: 'text-green-400',  bg: 'bg-green-400/10'  },
-          { label: 'فشل',           value: stats?.failed   ?? '…', color: 'text-red-400',    bg: 'bg-red-400/10'    },
-          { label: 'معطل',          value: stats?.disabled ?? '…', color: 'text-yellow-400', bg: 'bg-yellow-400/10' },
-          { label: 'محظور',         value: stats?.blocked  ?? '…', color: 'text-orange-400', bg: 'bg-orange-400/10' },
-          { label: 'مكرر',          value: stats?.duplicates ?? '…', color: 'text-purple-400', bg: 'bg-purple-400/10' },
+          { label: 'إجمالي',          value: stats?.total    ?? '…', color: 'text-blue-400',   bg: 'bg-blue-400/10'   },
+          { label: 'جاهز',             value: stats?.new      ?? '…', color: 'text-sky-400',    bg: 'bg-sky-400/10'    },
+          { label: 'تم الانضمام',      value: stats?.joined   ?? '…', color: 'text-green-400',  bg: 'bg-green-400/10'  },
+          { label: 'منضم مسبقًا',      value: stats?.alreadyJoined ?? '…', color: 'text-emerald-300', bg: 'bg-emerald-400/10' },
+          { label: 'إعادة محاولة',     value: stats?.retryPending ?? '…', color: 'text-amber-400', bg: 'bg-amber-400/10' },
+          { label: 'رابط غير صالح',    value: stats?.invalidLink ?? '…', color: 'text-red-400',    bg: 'bg-red-400/10' },
+          { label: 'خطأ حساب/شبكة',    value: (stats?.accountError || 0) + (stats?.temporaryError || 0) + (stats?.rateLimited || 0), color: 'text-orange-400', bg: 'bg-orange-400/10' },
+          { label: 'فشل الانضمام',     value: stats?.joinFailed ?? '…', color: 'text-red-300', bg: 'bg-red-300/10' },
         ].map((s, i) => (
           <Card key={i} className="card">
             <CardContent className="p-3">
@@ -657,9 +685,17 @@ export default function LinkDashboardView({ accountId }: { accountId: string | n
             onChange={e => { setFilterStatus(e.target.value); setTimeout(fetchLinks, 100); }}
           >
             <option value="">كل الحالات</option>
-            <option value="new">جديد</option>
+            <option value="new">جاهز للمعالجة</option>
+            <option value="queued">في الانتظار</option>
+            <option value="joining">جاري الانضمام</option>
             <option value="joined">تم الانضمام</option>
-            <option value="failed">فشل</option>
+            <option value="already_joined">منضم مسبقًا</option>
+            <option value="retry_pending">إعادة محاولة</option>
+            <option value="invalid_link">رابط غير صالح</option>
+            <option value="account_error">خطأ الحساب</option>
+            <option value="temporary_error">خطأ مؤقت</option>
+            <option value="rate_limited">تقييد مؤقت</option>
+            <option value="join_failed">فشل الانضمام</option>
             <option value="disabled">معطل</option>
             <option value="blocked">محظور</option>
           </select>

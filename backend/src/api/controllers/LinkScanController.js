@@ -30,9 +30,10 @@ const LinkScanEngine  = require('../services/LinkScanEngine');
 const DatabaseManager = require('../../database/DatabaseManager');
 const WhatsAppManager = require('../../bot/WhatsAppManager');
 const crypto          = require('crypto');
+const { parseMany, parseSupportedUrl, classifyJoinError } = require('../services/LinkUrlProcessingService');
 
-// نمط روابط واتساب لاستخراج كود الدعوة
-const WA_INVITE_RE = /chat\.whatsapp\.com\/([A-Za-z0-9_-]{10,})/;
+// يتم استخراج كود الدعوة بعد التطبيع، ولا يتم استخدام HTTP كحكم نهائي على صلاحية الرابط.
+const activeJoinLinks = new Set();
 
 class LinkScanController {
 
@@ -92,6 +93,19 @@ class LinkScanController {
       `ALTER TABLE discovered_links ADD COLUMN IF NOT EXISTS joined_at TIMESTAMPTZ`,
       `ALTER TABLE discovered_links ADD COLUMN IF NOT EXISTS join_fail_reason TEXT`,
       `ALTER TABLE discovered_links ADD COLUMN IF NOT EXISTS join_attempts INTEGER DEFAULT 0`,
+      `ALTER TABLE discovered_links ADD COLUMN IF NOT EXISTS original_url TEXT`,
+      `ALTER TABLE discovered_links ADD COLUMN IF NOT EXISTS normalized_url TEXT`,
+      `ALTER TABLE discovered_links ADD COLUMN IF NOT EXISTS canonical_url TEXT`,
+      `ALTER TABLE discovered_links ADD COLUMN IF NOT EXISTS url_hash TEXT`,
+      `ALTER TABLE discovered_links ADD COLUMN IF NOT EXISTS validation_status TEXT DEFAULT 'unvalidated'`,
+      `ALTER TABLE discovered_links ADD COLUMN IF NOT EXISTS join_status TEXT`,
+      `ALTER TABLE discovered_links ADD COLUMN IF NOT EXISTS error_code TEXT`,
+      `ALTER TABLE discovered_links ADD COLUMN IF NOT EXISTS error_category TEXT`,
+      `ALTER TABLE discovered_links ADD COLUMN IF NOT EXISTS error_message TEXT`,
+      `ALTER TABLE discovered_links ADD COLUMN IF NOT EXISTS retryable BOOLEAN DEFAULT false`,
+      `ALTER TABLE discovered_links ADD COLUMN IF NOT EXISTS next_retry_at TIMESTAMPTZ`,
+      `ALTER TABLE discovered_links ADD COLUMN IF NOT EXISTS last_attempt_at TIMESTAMPTZ`,
+      `ALTER TABLE discovered_links ADD COLUMN IF NOT EXISTS job_id TEXT`,
     ];
     for (const sql of alterCols) {
       await accountDB.run(sql).catch(() => {});
@@ -258,7 +272,18 @@ class LinkScanController {
         stats: {
           total:          total?.cnt || 0,
           new:            statusMap['new']     || 0,
+          queued:         statusMap['queued']  || 0,
+          joining:        statusMap['joining'] || 0,
           joined:         statusMap['joined']  || 0,
+          alreadyJoined:  statusMap['already_joined'] || 0,
+          retryPending:   statusMap['retry_pending'] || 0,
+          invalidLink:    statusMap['invalid_link'] || 0,
+          expiredLink:    statusMap['expired_link'] || 0,
+          accountError:   statusMap['account_error'] || 0,
+          accountRestricted: statusMap['account_restricted'] || 0,
+          rateLimited:    statusMap['rate_limited'] || 0,
+          temporaryError: statusMap['temporary_error'] || 0,
+          joinFailed:     statusMap['join_failed'] || 0,
           failed:         statusMap['failed']  || 0,
           disabled:       statusMap['disabled']|| 0,
           blocked:        statusMap['blocked'] || 0,
@@ -323,7 +348,7 @@ class LinkScanController {
     try {
       const { accountId, linkId } = req.params;
       const { status } = req.body;
-      const validStatuses = ['new', 'joined', 'failed', 'disabled', 'blocked'];
+      const validStatuses = ['new','queued','joining','joined','already_joined','retry_pending','invalid_link','unsupported_link','expired_link','account_error','account_restricted','rate_limited','temporary_error','network_error','join_failed','failed','disabled','blocked'];
       if (!validStatuses.includes(status)) {
         return res.status(400).json({ success: false, error: 'حالة غير صالحة' });
       }
@@ -371,20 +396,23 @@ class LinkScanController {
       }
 
       const effectiveAccountIds = accountIds.length > 0 ? accountIds : [accountId];
+      const linkKeys = links.map(link => link.id);
+      const locked = links.filter(link => activeJoinLinks.has(link.id));
+      if (locked.length) {
+        return res.status(409).json({ success: false, code: 'DUPLICATE_JOB', error: 'يوجد تشغيل نشط لبعض الروابط المحددة', linkIds: locked.map(link => link.id) });
+      }
 
-      // تشغيل عملية الانضمام في الخلفية
       const jobId = crypto.randomUUID();
+      for (const key of linkKeys) activeJoinLinks.add(key);
+      await accountDB.run(
+        `UPDATE discovered_links SET status='queued', join_status='queued', job_id=$${linkIds.length + 1}, updated_at=NOW() WHERE id IN (${placeholders})`,
+        [...linkIds, jobId]
+      );
       this._runJoinJob(accountId, links, effectiveAccountIds, {
         delaySeconds, randomDelay, randomDelayMax, distributionMode, jobId,
       }).catch(err => console.error('[JoinJob] Error:', err));
 
-      res.json({
-        success: true,
-        jobId,
-        message: `جاري الانضمام لـ ${links.length} رابط`,
-        linksCount: links.length,
-        accountsCount: effectiveAccountIds.length,
-      });
+      res.json({ success: true, jobId, message: `تم وضع ${links.length} رابطًا في قائمة الانضمام`, linksCount: links.length, accountsCount: effectiveAccountIds.length });
     } catch (err) {
       console.error('JoinDiscoveredLinks error:', err);
       res.status(500).json({ success: false, error: err.message });
@@ -395,93 +423,91 @@ class LinkScanController {
   //  تنفيذ عملية الانضمام في الخلفية
   // ══════════════════════════════════════════════════════════════════════════
   async _runJoinJob(sourceAccountId, links, accountIds, options) {
-    const { delaySeconds, randomDelay, randomDelayMax, distributionMode, jobId } = options;
+    const { delaySeconds, randomDelay, randomDelayMax, jobId } = options;
     const accountDB = await DatabaseManager.getAccountDB(sourceAccountId);
     const io = LinkScanEngine._io;
+    const maxAttempts = 3;
+    let done = 0;
 
     const emitProgress = (data) => {
       if (io) io.emit(`link_join_${sourceAccountId}`, { jobId, ...data });
     };
 
     emitProgress({ status: 'running', total: links.length, done: 0 });
-
-    for (let i = 0; i < links.length; i++) {
-      const link = links[i];
-      const targetAccountId = accountIds[i % accountIds.length];
-
-      try {
-        const sock = WhatsAppManager.getSession(targetAccountId);
-        if (!sock) {
-          await this._recordJoin(accountDB, link.id, link.url, targetAccountId, 'failed', 'الحساب غير متصل');
-          continue;
-        }
-
-        // استخراج كود الدعوة
-        const match = link.url.match(WA_INVITE_RE);
-        if (!match) {
-          await this._recordJoin(accountDB, link.id, link.url, targetAccountId, 'failed', 'رابط غير صالح');
-          continue;
-        }
-
-        const inviteCode = match[1];
-        let result = null;
-        let errorMsg = null;
-
+    try {
+      for (let i = 0; i < links.length; i++) {
+        const link = links[i];
+        const targetAccountId = accountIds[i % accountIds.length];
+        const parsed = parseSupportedUrl(link.url);
         try {
-          result = await sock.groupAcceptInvite(inviteCode);
-        } catch (joinErr) {
-          errorMsg = joinErr.message || 'خطأ في الانضمام';
+          if (!parsed.ok) {
+            await this._recordJoin(accountDB, link.id, link.url, targetAccountId, parsed.code === 'INVALID_LINK' || parsed.code === 'INVALID_FORMAT' ? 'invalid_link' : 'unsupported_link', parsed.reason, { errorCode: parsed.code, category: 'validation', retryable: false, normalizedUrl: null, canonicalUrl: null });
+          } else if (!WhatsAppManager.getSession(targetAccountId) || (WhatsAppManager.isReady && !WhatsAppManager.isReady(targetAccountId))) {
+            await this._recordJoin(accountDB, link.id, link.url, targetAccountId, 'account_error', 'الحساب غير متصل أو الجلسة غير جاهزة', { errorCode: 'ACCOUNT_NOT_READY', category: 'account', retryable: true, normalizedUrl: parsed.normalizedUrl, canonicalUrl: parsed.canonicalUrl });
+          } else {
+            let finalResult = null;
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+              await accountDB.run(`UPDATE discovered_links SET status='joining', join_status='joining', join_account_used=$1, last_attempt_at=NOW(), updated_at=NOW() WHERE id=$2`, [targetAccountId, link.id]);
+              try {
+                const result = await WhatsAppManager.getSession(targetAccountId).groupAcceptInvite(parsed.inviteCode);
+                if (!result) throw Object.assign(new Error('لم تُرجع WhatsApp نتيجة انضمام مؤكدة'), { code: 'EMPTY_JOIN_RESULT' });
+                finalResult = { status: 'joined', errorCode: null, category: 'success', retryable: false, severity: 'info', userMessage: 'تم الانضمام بنجاح', technicalMessage: null, result };
+                await this._recordJoin(accountDB, link.id, link.url, targetAccountId, 'joined', null, { ...finalResult, normalizedUrl: parsed.normalizedUrl, canonicalUrl: parsed.canonicalUrl, attempt });
+                break;
+              } catch (joinErr) {
+                const classified = classifyJoinError(joinErr);
+                const canRetry = classified.retryable && attempt < maxAttempts;
+                await this._recordJoin(accountDB, link.id, link.url, targetAccountId, canRetry ? 'retry_pending' : classified.status, classified.technicalMessage, { ...classified, normalizedUrl: parsed.normalizedUrl, canonicalUrl: parsed.canonicalUrl, attempt, nextRetryAt: canRetry ? new Date(Date.now() + Math.min(30000, 1000 * 2 ** attempt)).toISOString() : null });
+                finalResult = classified;
+                if (!canRetry) break;
+                await new Promise(resolve => setTimeout(resolve, Math.min(30000, 1000 * 2 ** attempt)));
+              }
+            }
+            emitProgress({ status: 'running', total: links.length, done: done + 1, lastUrl: link.url, result: finalResult });
+          }
+        } catch (err) {
+          const classified = classifyJoinError(err);
+          await this._recordJoin(accountDB, link.id, link.url, targetAccountId, classified.status, classified.technicalMessage, classified);
+        } finally {
+          done++;
+          emitProgress({ status: 'running', total: links.length, done, lastUrl: link.url });
+          activeJoinLinks.delete(link.id);
         }
 
-        const success = result && !errorMsg;
-        await this._recordJoin(
-          accountDB, link.id, link.url, targetAccountId,
-          success ? 'joined' : 'failed',
-          errorMsg || null
-        );
-
-        emitProgress({
-          status: 'running',
-          total: links.length,
-          done: i + 1,
-          lastUrl: link.url,
-          lastSuccess: success,
-          lastError: errorMsg,
-        });
-
-      } catch (err) {
-        await this._recordJoin(accountDB, link.id, link.url, targetAccountId, 'failed', err.message).catch(() => {});
-      }
-
-      // تأخير بين الروابط
-      if (i < links.length - 1) {
-        let delay = delaySeconds * 1000;
-        if (randomDelay) {
-          delay += Math.floor(Math.random() * (randomDelayMax - delaySeconds) * 1000);
+        if (i < links.length - 1) {
+          let delay = Math.max(0, Number(delaySeconds) || 0) * 1000;
+          if (randomDelay && randomDelayMax > delaySeconds) delay += Math.floor(Math.random() * (randomDelayMax - delaySeconds) * 1000);
+          if (delay > 0) await new Promise(resolve => setTimeout(resolve, Math.max(delay, 1000)));
         }
-        await new Promise(r => setTimeout(r, Math.max(delay, 3000)));
       }
+    } finally {
+      for (const link of links) activeJoinLinks.delete(link.id);
+      emitProgress({ status: 'finished', total: links.length, done });
     }
-
-    emitProgress({ status: 'finished', total: links.length, done: links.length });
   }
 
-  async _recordJoin(accountDB, linkId, url, accountId, status, failReason) {
+  async _recordJoin(accountDB, linkId, url, accountId, status, failReason, details = {}) {
+    const errorCode = details.errorCode || null;
+    const category = details.category || null;
+    const retryable = Boolean(details.retryable);
     try {
       await accountDB.run(
-        `UPDATE discovered_links SET status = $1, join_account_used = $2, updated_at = NOW(),
-         join_attempts = join_attempts + 1,
-         joined_at = CASE WHEN $1 = 'joined' THEN NOW() ELSE joined_at END,
-         join_fail_reason = $3
-         WHERE id = $4`,
-        [status, accountId, failReason || null, linkId]
+        `UPDATE discovered_links SET status=$1, join_status=$1, join_account_used=$2, updated_at=NOW(),
+         join_attempts=join_attempts+1, joined_at=CASE WHEN $1 IN ('joined','already_joined') THEN COALESCE(joined_at,NOW()) ELSE joined_at END,
+         join_fail_reason=$3, normalized_url=COALESCE($4,normalized_url), canonical_url=COALESCE($5,canonical_url),
+         validation_status=CASE WHEN $4 IS NULL THEN validation_status ELSE 'supported' END, error_code=$6, error_category=$7,
+         error_message=$8, retryable=$9, next_retry_at=$10, last_attempt_at=NOW()
+         WHERE id=$11`,
+        [status, accountId, failReason || null, details.normalizedUrl || null, details.canonicalUrl || null, errorCode, category, failReason || details.userMessage || null, retryable, details.nextRetryAt || null, linkId]
       );
       await accountDB.run(
-        `INSERT INTO join_history (url, account_id, status, fail_reason, attempted_at)
-         VALUES ($1, $2, $3, $4, NOW())`,
-        [url, accountId, status, failReason || null]
+        `INSERT INTO join_history (link_id,url,account_id,status,result_msg,fail_reason,attempted_at)
+         VALUES ($1,$2,$3,$4,$5,$6,NOW())`,
+        [linkId, url, accountId, status, details.userMessage || null, failReason || null]
       ).catch(() => {});
-    } catch (_) {}
+    } catch (error) {
+      console.warn(`[LinkJoin] persistence failed for ${linkId}: ${error.message}`);
+    }
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -491,46 +517,38 @@ class LinkScanController {
     try {
       const { accountId } = req.params;
       const { links = [], raw = '' } = req.body;
-
       const accountDB = await DatabaseManager.getAccountDB(accountId);
       await this._ensureTables(accountDB);
+      const parsedItems = parseMany([...(Array.isArray(links) ? links : []), raw]);
+      let imported = 0, duplicates = 0, invalid = 0, unsupported = 0;
+      const preview = [];
 
-      const urlList = [...links];
-
-      // استخراج روابط من نص خام
-      if (raw) {
-        const waPattern = /https?:\/\/chat\.whatsapp\.com\/[A-Za-z0-9_-]{10,}/g;
-        const tgPattern = /https?:\/\/t\.me\/[A-Za-z0-9_+]{3,}/g;
-        const found1 = raw.match(waPattern) || [];
-        const found2 = raw.match(tgPattern) || [];
-        urlList.push(...found1, ...found2);
-      }
-
-      let imported = 0, duplicates = 0;
-
-      for (const url of urlList) {
-        if (!url || typeof url !== 'string') continue;
-        const linkType = /chat\.whatsapp\.com/.test(url) ? 'whatsapp_group'
-                       : /t\.me/.test(url) ? 'telegram_group' : 'other';
-        try {
+      for (const item of parsedItems) {
+        if (!item.originalUrl) continue;
+        if (!item.ok) {
+          invalid += item.code === 'INVALID_LINK' || item.code === 'INVALID_FORMAT' ? 1 : 0;
+          unsupported += item.code === 'UNSUPPORTED_LINK' ? 1 : 0;
+          const rawUrl = String(item.originalUrl).trim();
           await accountDB.run(
-            `INSERT INTO discovered_links (url, link_type, discovered_by_account, status, discovered_at, updated_at)
-             VALUES ($1, $2, $3, 'new', NOW(), NOW())
-             ON CONFLICT (url) DO NOTHING`,
-            [url.trim(), linkType, accountId]
-          );
-          imported++;
-        } catch (e) {
-          if (e.message?.includes('duplicate') || e.message?.includes('unique')) duplicates++;
+            `INSERT INTO discovered_links (url, original_url, link_type, discovered_by_account, status, validation_status, error_code, error_category, error_message, retryable, discovered_at, updated_at)
+             VALUES ($1,$2,'other',$3,$4,'invalid',$5,'validation',$6,false,NOW(),NOW()) ON CONFLICT (url) DO NOTHING`,
+            [rawUrl, rawUrl, accountId, item.code === 'UNSUPPORTED_LINK' ? 'unsupported_link' : 'invalid_link', item.code, item.reason]
+          ).catch(() => {});
+          preview.push({ original_url: rawUrl, status: item.code === 'UNSUPPORTED_LINK' ? 'unsupported_link' : 'invalid_link', error_code: item.code, message: item.reason });
+          continue;
         }
+
+        const result = await accountDB.run(
+          `INSERT INTO discovered_links (url, original_url, normalized_url, canonical_url, url_hash, link_type, discovered_by_account, status, validation_status, join_status, discovered_at, updated_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,'new','supported','pending',NOW(),NOW()) ON CONFLICT (url) DO NOTHING`,
+          [item.canonicalUrl, item.originalUrl, item.normalizedUrl, item.canonicalUrl, item.urlHash, item.type, accountId]
+        );
+        const inserted = Number(result?.rowCount ?? result?.changes ?? 0) > 0;
+        if (inserted) imported++; else duplicates++;
+        preview.push({ original_url: item.originalUrl, normalized_url: item.normalizedUrl, canonical_url: item.canonicalUrl, status: inserted ? 'new' : 'duplicate', validation_status: 'supported' });
       }
 
-      res.json({
-        success: true,
-        imported,
-        duplicates,
-        message: `تم استيراد ${imported} رابط (${duplicates} مكرر تم تجاهله)`,
-      });
+      res.json({ success: true, imported, duplicates, invalid, unsupported, preview, message: `تمت معالجة ${parsedItems.length} عنصرًا: ${imported} جديد، ${duplicates} مكرر، ${invalid} غير صالح فعليًا، ${unsupported} غير مدعوم` });
     } catch (err) {
       console.error('ImportLinks error:', err);
       res.status(500).json({ success: false, error: err.message });
