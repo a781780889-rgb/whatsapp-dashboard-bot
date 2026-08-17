@@ -13,6 +13,29 @@
 const WhatsAppManager = require('../../bot/WhatsAppManager');
 const DatabaseManager = require('../../database/DatabaseManager');
 const LinkExtractorService = require('./LinkExtractorService');
+const crypto = require('crypto');
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+function canonicalizeUrl(value) {
+  const match = String(value || '').trim().match(/https?:\/\/[^\s<>()]+/i);
+  if (!match) return null;
+  try {
+    const url = new URL(match[0].replace(/[),.;!?؟]+$/g, ''));
+    url.protocol = 'https:';
+    url.hostname = url.hostname.toLowerCase();
+    url.hash = '';
+    for (const key of [...url.searchParams.keys()]) if (/^(utm_|fbclid$|gclid$|ref$)/i.test(key)) url.searchParams.delete(key);
+    url.pathname = url.pathname.replace(/\/{2,}/g, '/').replace(/\/$/, '');
+    return url.toString().replace(/\/$/, '');
+  } catch { return null; }
+}
+function linkHash(url) { return crypto.createHash('sha256').update(String(url || '')).digest('hex'); }
+function classifyScanError(error) {
+  const message = String(error?.message || error || 'خطأ غير معروف');
+  const lower = message.toLowerCase();
+  const retryable = /timeout|timed out|network|socket|econn|temporar|rate.?limit|flood|429|502|503|504|disconnect/.test(lower);
+  return { type: retryable ? 'RETRYABLE' : 'NON_RETRYABLE', message, source: error?.code || (retryable ? 'transport' : 'scan') };
+}
 
 // نمط روابط الدعوة
 const INVITE_PATTERNS = [
@@ -62,26 +85,42 @@ class LinkScanEngine {
   //  الحصول على حالة مهمة
   // ══════════════════════════════════════════════════════════════════════════
   getJob(accountId) {
-    return this._jobs.get(accountId) || {
-      status: 'idle',
-      progress: 0,
-      total: 0,
-      scanned: 0,
-      found: 0,
-      duplicates: 0,
-      currentChat: null,
-      startedAt: null,
-      finishedAt: null,
-      log: [],
-    };
+    return this._publicJob(this._jobs.get(accountId)) || { id: null, status: 'idle', progress: 0, total: 0, scanned: 0, found: 0, duplicates: 0, invalid: 0, review: 0, currentChat: null, startedAt: null, finishedAt: null, lastError: null, log: [] };
   }
 
   getAllJobs() {
     const result = {};
-    for (const [id, job] of this._jobs.entries()) {
-      result[id] = job;
-    }
+    for (const [id, job] of this._jobs.entries()) result[id] = this._publicJob(job);
     return result;
+  }
+
+  async loadJob(accountId) {
+    const active = this._jobs.get(accountId); if (active) return this._publicJob(active);
+    try {
+      const db = await DatabaseManager.getAccountDB(accountId); await this._ensureTables(db);
+      const row = await db.get(`SELECT * FROM link_scan_jobs WHERE account_id=$1 ORDER BY updated_at DESC LIMIT 1`, [accountId]);
+      if (!row) return this.getJob(accountId);
+      const job = { id: row.id, accountIds: row.account_ids || [accountId], status: row.status, progress: row.total ? Math.round((Number(row.scanned||0)/Number(row.total))*100) : 0, total:Number(row.total||0), scanned:Number(row.scanned||0), found:Number(row.found||0), duplicates:Number(row.duplicates||0), invalid:Number(row.invalid||0), review:Number(row.review||0), retries:Number(row.retries||0), maxRetries:Number(row.max_retries||3), currentChat:row.current_chat, startedAt:row.started_at, finishedAt:row.finished_at, lastActivityAt:row.last_activity_at, lastError:row.last_error, errorType:row.error_type, checkpointIndex:Number(row.checkpoint_index||0), source:row.source, log:[], _abort:false, _accountDB:db };
+      this._jobs.set(accountId, job); return this._publicJob(job);
+    } catch { return this.getJob(accountId); }
+  }
+
+  _publicJob(job) {
+    if (!job) return null;
+    const copy = { ...job };
+    delete copy._abort; delete copy._accountDB; delete copy._persist;
+    return copy;
+  }
+
+  async _persistJob(accountId, job) {
+    try {
+      const db = job._accountDB || await DatabaseManager.getAccountDB(accountId);
+      await db.run(`INSERT INTO link_scan_jobs (id,account_id,account_ids,status,total,scanned,found,duplicates,invalid,review,retries,max_retries,current_chat,source,started_at,finished_at,last_activity_at,last_error,error_type,checkpoint_index,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW(),$17,$18,$19,NOW()) ON CONFLICT (id) DO UPDATE SET status=$4,total=$5,scanned=$6,found=$7,duplicates=$8,invalid=$9,review=$10,retries=$11,current_chat=$13,finished_at=$16,last_activity_at=NOW(),last_error=$17,error_type=$18,checkpoint_index=$19,updated_at=NOW()`, [job.id, accountId, JSON.stringify(job.accountIds || [accountId]), job.status, job.total || 0, job.scanned || 0, job.found || 0, job.duplicates || 0, job.invalid || 0, job.review || 0, job.retries || 0, job.maxRetries || 3, job.currentChat, job.source || 'whatsapp_live', job.startedAt, job.finishedAt, job.lastError || null, job.errorType || null, job.checkpointIndex || 0]);
+    } catch (persistError) { console.warn(`[LinkScanEngine] job persistence failed: ${persistError.message}`); }
+  }
+
+  async _recordEvent(accountId, job, eventType, message, details = {}) {
+    try { const db = job._accountDB || await DatabaseManager.getAccountDB(accountId); await db.run(`INSERT INTO link_scan_events (job_id,account_id,event_type,message,details) VALUES ($1,$2,$3,$4,$5)`, [job.id, accountId, eventType, message, JSON.stringify(details)]); } catch (eventError) { console.warn(`[LinkScanEngine] event persistence failed: ${eventError.message}`); }
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -89,52 +128,41 @@ class LinkScanEngine {
   // ══════════════════════════════════════════════════════════════════════════
   async startScan(accountIds) {
     if (!Array.isArray(accountIds)) accountIds = [accountIds];
-    const started = [];
-
-    for (const accountId of accountIds) {
+    const started = []; const skipped = []; const rejected = [];
+    for (const accountId of [...new Set(accountIds.filter(Boolean).map(String))]) {
       const existing = this._jobs.get(accountId);
-      if (existing && existing.status === 'running') {
-        continue; // لا تبدأ مهمة ثانية
-      }
-
-      const job = {
-        status: 'running',
-        progress: 0,
-        total: 0,
-        scanned: 0,
-        found: 0,
-        duplicates: 0,
-        currentChat: null,
-        startedAt: new Date().toISOString(),
-        finishedAt: null,
-        log: [],
-        _abort: false,
-      };
-      this._jobs.set(accountId, job);
-      started.push(accountId);
-
-      // تشغيل في الخلفية بدون await
-      this._runScan(accountId, job).catch(err => {
-        job.status = 'error';
-        job.log.push({ ts: new Date().toISOString(), msg: `❌ خطأ: ${err.message}` });
-        this._emit(accountId, job);
-      });
+      if (existing && ['queued','running','waiting','retrying','processing'].includes(existing.status)) { skipped.push({ accountId, jobId: existing.id, reason: 'active_scan_exists' }); continue; }
+      if (!WhatsAppManager.isReady(accountId)) { rejected.push({ accountId, reason: 'account_not_ready' }); continue; }
+      const job = { id: `SCAN-${new Date().toISOString().slice(0,10).replace(/-/g,'')}-${crypto.randomUUID().slice(0,8)}`, accountIds: [accountId], status: 'queued', progress: 0, total: 0, scanned: 0, found: 0, duplicates: 0, invalid: 0, review: 0, retries: 0, maxRetries: 3, currentChat: null, startedAt: new Date().toISOString(), finishedAt: null, lastActivityAt: new Date().toISOString(), lastError: null, errorType: null, checkpointIndex: 0, source: 'whatsapp_live', log: [], _abort: false };
+      try {
+        const db = await DatabaseManager.getAccountDB(accountId); await this._ensureTables(db); job._accountDB = db;
+        const activeDb = await db.get(`SELECT id FROM link_scan_jobs WHERE account_id=$1 AND status IN ('queued','running','waiting','retrying','processing') LIMIT 1`, [accountId]).catch(() => null);
+        if (activeDb) { skipped.push({ accountId, jobId: activeDb.id, reason: 'active_scan_exists' }); continue; }
+        this._jobs.set(accountId, job); await this._persistJob(accountId, job); await this._recordEvent(accountId, job, 'started', 'تم إنشاء مهمة فحص جديدة'); started.push({ accountId, jobId: job.id });
+        this._runScan(accountId, job).catch(async err => { const info=classifyScanError(err); job.status='error'; job.errorType=info.type; job.lastError=info.message; job.finishedAt=new Date().toISOString(); job.log.push({ts:new Date().toISOString(),msg:`❌ ${info.message}`}); await this._persistJob(accountId,job); await this._recordEvent(accountId,job,'error',info.message,info); this._emit(accountId,job); });
+      } catch (error) { rejected.push({ accountId, reason: error.message }); }
     }
-
-    return started;
+    return { started, skipped, rejected };
   }
 
   // ══════════════════════════════════════════════════════════════════════════
   //  إيقاف مهمة الفحص
   // ══════════════════════════════════════════════════════════════════════════
-  stopScan(accountId) {
-    const job = this._jobs.get(accountId);
-    if (!job || job.status !== 'running') return false;
-    job._abort = true;
-    job.status = 'stopped';
-    job.log.push({ ts: new Date().toISOString(), msg: '⏹ تم إيقاف الفحص' });
-    this._emit(accountId, job);
-    return true;
+  async stopScan(accountId) {
+    const job = this._jobs.get(accountId); if (!job || !['queued','running','waiting','retrying','processing','paused'].includes(job.status)) return false;
+    job._abort = true; job.status = 'stopped'; job.finishedAt = new Date().toISOString(); job.log.push({ ts: new Date().toISOString(), msg: '⏹ تم إيقاف الفحص بأمان وحفظ آخر نقطة' }); await this._persistJob(accountId, job); await this._recordEvent(accountId, job, 'stopped', 'تم إيقاف الفحص بأمان'); this._emit(accountId, job); return true;
+  }
+
+  async pauseScan(accountId) {
+    const job=this._jobs.get(accountId); if(!job||!['running','processing','waiting'].includes(job.status)) return false; job.status='paused'; job.log.push({ts:new Date().toISOString(),msg:'⏸ تم إيقاف استقبال عناصر جديدة مؤقتاً'}); await this._persistJob(accountId,job); await this._recordEvent(accountId,job,'paused','تم إيقاف الفحص مؤقتاً'); this._emit(accountId,job); return true;
+  }
+
+  async resumeScan(accountId) {
+    const job=this._jobs.get(accountId); if(!job||!['paused','stopped','error'].includes(job.status)) return false; job._abort=false; job.status='running'; job.finishedAt=null; job.log.push({ts:new Date().toISOString(),msg:'▶ تم استكمال الفحص من آخر نقطة محفوظة'}); await this._persistJob(accountId,job); await this._recordEvent(accountId,job,'resumed','تم استكمال الفحص من آخر Checkpoint'); this._runScan(accountId,job).catch(()=>{}); this._emit(accountId,job); return true;
+  }
+
+  async retryScan(accountId) {
+    const job=this._jobs.get(accountId); if(!job||job.status!=='error'||job.retries>=job.maxRetries) return false; job.retries++; job.status='retrying'; job.lastError=null; job.log.push({ts:new Date().toISOString(),msg:`🔄 إعادة المحاولة ${job.retries}/${job.maxRetries}`}); await this._persistJob(accountId,job); await this._recordEvent(accountId,job,'retry','تمت جدولة إعادة المحاولة',{attempt:job.retries}); await sleep(Math.min(30000,1000*2**job.retries + Math.floor(Math.random()*500))); job.status='running'; job._abort=false; this._runScan(accountId,job).catch(()=>{}); this._emit(accountId,job); return true;
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -142,6 +170,7 @@ class LinkScanEngine {
   // ══════════════════════════════════════════════════════════════════════════
   async _runScan(accountId, job) {
     try {
+      job.status = 'running'; job.lastActivityAt = new Date().toISOString(); await this._persistJob(accountId, job); this._emit(accountId, job);
       // ── [FIX-ROOT] فحص حالة الجلسة بدقة قبل أي شيء ──────────────────────
       // كانت المشكلة السابقة تُظهر "0 محادثة" حتى لو كانت الجلسة منتهية أو
       // الـ QR لم يُمسح بعد، لأن الكود القديم لم يكن يُفرّق بين "متصل بدون
@@ -179,7 +208,7 @@ class LinkScanEngine {
       const { chats, groupsCount, privateCount, excluded, excludedReasons, source }
         = await this._fetchRealChats(accountId, sock, accountDB);
 
-      job.total = chats.length;
+      job.total = chats.length; job.lastActivityAt = new Date().toISOString(); await this._persistJob(accountId, job);
 
       console.log(`[LinkScanEngine] Source: ${source}`);
       console.log(`[LinkScanEngine] Fetched Chats: ${chats.length}`);
@@ -209,17 +238,19 @@ class LinkScanEngine {
       }
 
       // فحص كل محادثة
-      for (let i = 0; i < chats.length; i++) {
-        if (job._abort) break;
+      for (let i = Math.max(0, Number(job.checkpointIndex || 0)); i < chats.length; i++) {
+        if (job._abort || job.status === 'paused' || job.status === 'stopped') break;
 
         const chat = chats[i];
         const jid = chat.id;
         const name = chat.name || jid.split('@')[0];
 
         job.scanned = i + 1;
+        job.checkpointIndex = i;
         job.currentChat = name || jid;
         job.progress = Math.round(((i + 1) / chats.length) * 100);
-        this._emit(accountId, job);
+        job.lastActivityAt = new Date().toISOString();
+        await this._persistJob(accountId, job); this._emit(accountId, job);
 
         try {
           // استخراج الروابط من: اسم المحادثة + الوصف (إن وُجد للمجموعات)
@@ -231,7 +262,7 @@ class LinkScanEngine {
           for (const url of links) {
             if (job._abort) break;
             const linkType = detectLinkType(url);
-            const saved = await this._saveLink(accountDB, accountId, url, linkType, jid);
+            const saved = await this._saveLink(accountDB, accountId, url, linkType, jid, job);
             if (saved === 'new') {
               job.found++;
               job.log.push({
@@ -241,20 +272,20 @@ class LinkScanEngine {
               });
               this._emit(accountId, job);
             } else if (saved === 'duplicate') {
-              job.duplicates++;
+              job.duplicates++; await this._recordEvent(accountId, job, 'duplicate', `تم تجاهل رابط مكرر: ${url}`, { url });
+            } else if (saved === 'invalid') {
+              job.invalid++; await this._recordEvent(accountId, job, 'invalid', `رابط غير صالح: ${url}`, { url });
             }
           }
         } catch (chatErr) {
-          console.error(`[LinkScanEngine] خطأ في فحص المحادثة ${jid}:`, chatErr.message);
+          const info=classifyScanError(chatErr); job.review=(job.review||0)+1; job.log.push({ts:new Date().toISOString(),msg:`⚠️ تعذر فحص ${name}: ${info.message}`}); await this._recordEvent(accountId,job,'chat_error',info.message,{chatId:jid,errorType:info.type}); console.error(`[LinkScanEngine] خطأ في فحص المحادثة ${jid}:`, chatErr.message);
         }
 
         // انتظار قصير لتجنب إرهاق الموارد
-        if (i % 20 === 0 && i > 0) {
-          await new Promise(r => setTimeout(r, 100));
-        }
+        if (i % 10 === 0 && i > 0) { await this._persistJob(accountId, job); await sleep(100); }
       }
 
-      if (!job._abort) {
+      if (!job._abort && job.status !== 'paused' && job.status !== 'stopped') {
         job.status = 'finished';
         job.progress = 100;
         job.finishedAt = new Date().toISOString();
@@ -264,13 +295,15 @@ class LinkScanEngine {
         });
       }
 
+      await this._persistJob(accountId, job); await this._recordEvent(accountId, job, job.status === 'finished' ? 'completed' : job.status, job.status === 'finished' ? 'اكتمل الفحص وحُفظت النتائج' : 'تم حفظ Checkpoint للفحص');
       console.log(`[LinkScanEngine] ── انتهى الفحص: ${job.found} رابط جديد، ${job.duplicates} مكرر ──`);
       this._emit(accountId, job);
 
     } catch (err) {
-      job.status = 'error';
+      const info=classifyScanError(err); job.status = 'error'; job.errorType=info.type; job.lastError=info.message;
       job.finishedAt = new Date().toISOString();
-      job.log.push({ ts: new Date().toISOString(), msg: `❌ ${err.message}` });
+      job.log.push({ ts: new Date().toISOString(), msg: `❌ ${info.message}` });
+      await this._persistJob(accountId, job); await this._recordEvent(accountId, job, 'error', info.message, info);
       console.error(`[LinkScanEngine] خطأ فادح في الفحص لحساب ${accountId}:`, err.message);
       this._emit(accountId, job);
       throw err;
@@ -388,27 +421,15 @@ class LinkScanEngine {
   // ══════════════════════════════════════════════════════════════════════════
   //  حفظ رابط في قاعدة البيانات
   // ══════════════════════════════════════════════════════════════════════════
-  async _saveLink(accountDB, accountId, url, linkType, groupJid) {
+  async _saveLink(accountDB, accountId, url, linkType, groupJid, job = null) {
     try {
-      // فحص التكرار
-      const existing = await accountDB.get(
-        `SELECT id FROM discovered_links WHERE url = $1`,
-        [url]
-      );
-      if (existing) return 'duplicate';
-
-      // حفظ الرابط الجديد
-      await accountDB.run(
-        `INSERT INTO discovered_links
-         (url, link_type, group_jid, discovered_by_account, status, join_attempts, discovered_at, updated_at)
-         VALUES ($1, $2, $3, $4, 'new', 0, NOW(), NOW())
-         ON CONFLICT (url) DO NOTHING`,
-        [url, linkType, groupJid || null, accountId]
-      );
-      return 'new';
-    } catch (err) {
-      return 'error';
-    }
+      const normalized = canonicalizeUrl(url); if (!normalized) return 'invalid';
+      const hash = linkHash(normalized);
+      const result = await accountDB.run(`INSERT INTO discovered_links (url,normalized_url,url_hash,link_type,group_jid,discovered_by_account,status,verification_status,join_attempts,discovered_at,first_seen_at,last_seen_at,appearance_count,scan_id,source,updated_at) VALUES ($1,$2,$3,$4,$5,$6,'new','needs_review',0,NOW(),NOW(),NOW(),1,$7,$8,NOW()) ON CONFLICT (url) DO NOTHING RETURNING id`, [url, normalized, hash, linkType, groupJid || null, accountId, job?.id || null, job?.source || 'whatsapp_live']);
+      const inserted = Array.isArray(result?.rows) ? result.rows.length > 0 : Number(result?.rowCount ?? result?.changes ?? 0) > 0;
+      if (!inserted) await accountDB.run(`UPDATE discovered_links SET normalized_url=COALESCE(normalized_url,$2),url_hash=COALESCE(url_hash,$3),last_seen_at=NOW(),appearance_count=COALESCE(appearance_count,0)+1,updated_at=NOW() WHERE url=$1`, [url, normalized, hash]);
+      return inserted ? 'new' : 'duplicate';
+    } catch (err) { const info=classifyScanError(err); if(info.type==='RETRYABLE') throw err; return 'error'; }
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -440,10 +461,26 @@ class LinkScanEngine {
       `ALTER TABLE discovered_links ADD COLUMN IF NOT EXISTS joined_at TIMESTAMPTZ`,
       `ALTER TABLE discovered_links ADD COLUMN IF NOT EXISTS join_fail_reason TEXT`,
       `ALTER TABLE discovered_links ADD COLUMN IF NOT EXISTS join_attempts INTEGER DEFAULT 0`,
+      `ALTER TABLE discovered_links ADD COLUMN IF NOT EXISTS normalized_url TEXT`,
+      `ALTER TABLE discovered_links ADD COLUMN IF NOT EXISTS url_hash TEXT`,
+      `ALTER TABLE discovered_links ADD COLUMN IF NOT EXISTS first_seen_at TIMESTAMPTZ DEFAULT NOW()`,
+      `ALTER TABLE discovered_links ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ DEFAULT NOW()`,
+      `ALTER TABLE discovered_links ADD COLUMN IF NOT EXISTS appearance_count INTEGER DEFAULT 1`,
+      `ALTER TABLE discovered_links ADD COLUMN IF NOT EXISTS verification_status TEXT DEFAULT 'unverified'`,
+      `ALTER TABLE discovered_links ADD COLUMN IF NOT EXISTS verification_checked_at TIMESTAMPTZ`,
+      `ALTER TABLE discovered_links ADD COLUMN IF NOT EXISTS verification_error TEXT`,
+      `ALTER TABLE discovered_links ADD COLUMN IF NOT EXISTS scan_id TEXT`,
+      `ALTER TABLE discovered_links ADD COLUMN IF NOT EXISTS source TEXT`,
     ];
     for (const sql of cols) {
       await accountDB.run(sql).catch(() => {});
     }
+    await accountDB.run(`CREATE INDEX IF NOT EXISTS discovered_links_hash_idx ON discovered_links(url_hash)`).catch(() => {});
+    await accountDB.run(`CREATE INDEX IF NOT EXISTS discovered_links_status_idx ON discovered_links(status)`).catch(() => {});
+    await accountDB.run(`CREATE INDEX IF NOT EXISTS discovered_links_scan_idx ON discovered_links(scan_id)`).catch(() => {});
+    await accountDB.run(`CREATE TABLE IF NOT EXISTS link_scan_jobs (id TEXT PRIMARY KEY, account_id TEXT NOT NULL, account_ids JSONB DEFAULT '[]', status TEXT NOT NULL DEFAULT 'queued', total INTEGER DEFAULT 0, scanned INTEGER DEFAULT 0, found INTEGER DEFAULT 0, duplicates INTEGER DEFAULT 0, invalid INTEGER DEFAULT 0, review INTEGER DEFAULT 0, retries INTEGER DEFAULT 0, max_retries INTEGER DEFAULT 3, current_chat TEXT, source TEXT, started_at TIMESTAMPTZ, finished_at TIMESTAMPTZ, last_activity_at TIMESTAMPTZ, last_error TEXT, error_type TEXT, checkpoint_index INTEGER DEFAULT 0, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW())`).catch(() => {});
+    await accountDB.run(`CREATE UNIQUE INDEX IF NOT EXISTS link_scan_active_account_idx ON link_scan_jobs(account_id) WHERE status IN ('queued','running','waiting','retrying','processing')`).catch(() => {});
+    await accountDB.run(`CREATE TABLE IF NOT EXISTS link_scan_events (id BIGSERIAL PRIMARY KEY, job_id TEXT NOT NULL, account_id TEXT NOT NULL, event_type TEXT NOT NULL, message TEXT, details JSONB DEFAULT '{}', created_at TIMESTAMPTZ DEFAULT NOW())`).catch(() => {});
   }
 
   // ══════════════════════════════════════════════════════════════════════════

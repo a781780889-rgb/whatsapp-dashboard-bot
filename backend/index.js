@@ -227,6 +227,13 @@ async function bootstrap() {
 
         // 3. [FIX-2] Inject Socket.IO — setIO يُهيِّئ SocketBridge أيضاً
         WhatsAppManager.setIO(io);
+        try {
+            const LinkScanEngine = require('./src/api/services/LinkScanEngine');
+            LinkScanEngine.setSocketIO(io);
+            logger.info('[LinkScan] Socket.IO bridge initialized for live scan updates.');
+        } catch (linkScanSocketErr) {
+            logger.warn({ err: linkScanSocketErr }, '[LinkScan] Socket.IO bridge initialization failed.');
+        }
 
         // [FIX-13] JWTService — حقن Redis للـ blacklist + family tracking
         try {

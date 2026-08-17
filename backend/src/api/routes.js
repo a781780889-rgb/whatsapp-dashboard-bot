@@ -218,6 +218,9 @@ const LinkScanController = require('./controllers/LinkScanController');
 // بدء / إيقاف / حالة الفحص
 router.post('/accounts/:accountId/links/scan/start',      auth, LinkScanController.startScan.bind(LinkScanController));
 router.post('/accounts/:accountId/links/scan/stop',       auth, LinkScanController.stopScan.bind(LinkScanController));
+router.post('/accounts/:accountId/links/scan/pause',      auth, LinkScanController.pauseScan.bind(LinkScanController));
+router.post('/accounts/:accountId/links/scan/resume',     auth, LinkScanController.resumeScan.bind(LinkScanController));
+router.post('/accounts/:accountId/links/scan/retry',      auth, LinkScanController.retryScan.bind(LinkScanController));
 router.get('/accounts/:accountId/links/scan/status',      auth, LinkScanController.getScanStatus.bind(LinkScanController));
 router.get('/links/scan/all-status',                      auth,           LinkScanController.getAllScanStatus.bind(LinkScanController));
 router.post('/links/scan/start-all',                      auth,           LinkScanController.startScanAll.bind(LinkScanController));
@@ -226,6 +229,7 @@ router.post('/links/scan/start-all',                      auth,           LinkSc
 router.get('/accounts/:accountId/links/discovered',               auth, LinkScanController.getDiscoveredLinks.bind(LinkScanController));
 router.get('/accounts/:accountId/links/discovered/stats',         auth, LinkScanController.getDiscoveredStats.bind(LinkScanController));
 router.get('/accounts/:accountId/links/discovered/export/csv',    auth, LinkScanController.exportDiscoveredCSV.bind(LinkScanController));
+router.get('/accounts/:accountId/links/discovered/export/:format', auth, LinkScanController.exportDiscovered.bind(LinkScanController));
 router.delete('/accounts/:accountId/links/discovered/duplicates', auth, LinkScanController.deleteDuplicates.bind(LinkScanController));
 router.delete('/accounts/:accountId/links/discovered/cleanup',    auth, LinkScanController.cleanupDisabledLinks.bind(LinkScanController));
 router.delete('/accounts/:accountId/links/discovered/:linkId',    auth, LinkScanController.deleteDiscoveredLink.bind(LinkScanController));

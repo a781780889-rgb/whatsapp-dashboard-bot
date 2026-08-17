@@ -96,6 +96,7 @@ class LinkScanController {
     for (const sql of alterCols) {
       await accountDB.run(sql).catch(() => {});
     }
+    await LinkScanEngine._ensureTables(accountDB).catch(() => {});
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -108,14 +109,10 @@ class LinkScanController {
       const ids = accountIds.length > 0 ? accountIds : [accountId];
 
       const started = await LinkScanEngine.startScan(ids);
-      res.json({
-        success: true,
-        message: `بدأ الفحص لـ ${started.length} حساب`,
-        started,
-      });
+      res.json({ success: true, message: `تمت معالجة طلب الفحص: ${started.started?.length || 0} مهمة بدأت`, ...started });
     } catch (err) {
       console.error('StartScan error:', err);
-      res.status(500).json({ success: false, error: err.message });
+      res.status(500).json({ success: false, error: 'تعذر بدء الفحص', details: { code: err.code || 'SCAN_START_FAILED' } });
     }
   }
 
@@ -125,12 +122,16 @@ class LinkScanController {
   async stopScan(req, res) {
     try {
       const { accountId } = req.params;
-      const stopped = LinkScanEngine.stopScan(accountId);
-      res.json({ success: true, stopped, message: stopped ? 'تم إيقاف الفحص' : 'لا يوجد فحص نشط' });
+      const stopped = await LinkScanEngine.stopScan(accountId);
+      res.json({ success: true, stopped, message: stopped ? 'تم إيقاف الفحص بأمان' : 'لا يوجد فحص نشط' });
     } catch (err) {
-      res.status(500).json({ success: false, error: err.message });
+      res.status(500).json({ success: false, error: 'تعذر إيقاف الفحص بأمان', details: { code: err.code || 'SCAN_STOP_FAILED' } });
     }
   }
+
+  async pauseScan(req,res){try{const paused=await LinkScanEngine.pauseScan(req.params.accountId);res.json({success:true,paused,message:paused?'تم إيقاف الفحص مؤقتاً':'لا توجد مهمة قابلة للإيقاف المؤقت'})}catch(err){res.status(500).json({success:false,error:'تعذر إيقاف الفحص مؤقتاً'})}}
+  async resumeScan(req,res){try{const resumed=await LinkScanEngine.resumeScan(req.params.accountId);res.json({success:true,resumed,message:resumed?'تم استكمال الفحص من آخر نقطة محفوظة':'لا توجد مهمة قابلة للاستكمال'})}catch(err){res.status(500).json({success:false,error:'تعذر استكمال الفحص'})}}
+  async retryScan(req,res){try{const retried=await LinkScanEngine.retryScan(req.params.accountId);res.json({success:true,retried,message:retried?'تمت جدولة إعادة المحاولة':'لا توجد مهمة فاشلة قابلة للإعادة'})}catch(err){res.status(500).json({success:false,error:'تعذر جدولة إعادة المحاولة'})}}
 
   // ══════════════════════════════════════════════════════════════════════════
   //  حالة الفحص
@@ -138,7 +139,7 @@ class LinkScanController {
   async getScanStatus(req, res) {
     try {
       const { accountId } = req.params;
-      const job = LinkScanEngine.getJob(accountId);
+      const job = await LinkScanEngine.loadJob(accountId);
       res.json({ success: true, job });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
@@ -167,7 +168,7 @@ class LinkScanController {
       }
 
       const started = await LinkScanEngine.startScan(ids);
-      res.json({ success: true, message: `بدأ الفحص لـ ${started.length} حساب`, started });
+      res.json({ success: true, message: `تمت معالجة طلب الفحص: ${started.started?.length || 0} مهمة بدأت`, ...started });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -182,7 +183,9 @@ class LinkScanController {
       const accountDB = await DatabaseManager.getAccountDB(accountId);
       await this._ensureTables(accountDB);
 
-      const limit    = Math.min(parseInt(req.query.limit) || 200, 1000);
+      const limit    = Math.min(parseInt(req.query.limit || req.query.pageSize) || 200, 1000);
+      const page     = Math.max(parseInt(req.query.page) || 1, 1);
+      const offset   = (page - 1) * limit;
       const status   = req.query.status    || null;
       const linkType = req.query.linkType  || null;
       const search   = req.query.search    || null;
@@ -208,15 +211,12 @@ class LinkScanController {
       }
 
       const where = conditions.join(' AND ');
-      params.push(limit);
-
-      const links = await accountDB.all(
-        `SELECT * FROM discovered_links WHERE ${where}
-         ORDER BY ${sortBy} ${sortDir} LIMIT $${pIdx}`,
-        params
-      );
-
-      res.json({ success: true, links, count: links.length });
+      const countParams = [...params];
+      params.push(limit, offset);
+      const links = await accountDB.all(`SELECT * FROM discovered_links WHERE ${where} ORDER BY ${sortBy} ${sortDir} LIMIT $${pIdx} OFFSET $${pIdx + 1}`, params);
+      const totalRow = await accountDB.get(`SELECT COUNT(*) AS cnt FROM discovered_links WHERE ${where}`, countParams).catch(() => ({ cnt: links.length }));
+      const total = Number(totalRow?.cnt || 0);
+      res.json({ success: true, links, count: links.length, page, pageSize: limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) });
     } catch (err) {
       console.error('GetDiscoveredLinks error:', err);
       res.status(500).json({ success: false, error: err.message });
@@ -649,6 +649,18 @@ class LinkScanController {
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
     }
+  }
+
+  async exportDiscovered(req, res) {
+    try {
+      const { accountId } = req.params; const format = String(req.params.format || req.query.format || 'csv').toLowerCase();
+      const accountDB = await DatabaseManager.getAccountDB(accountId); await this._ensureTables(accountDB);
+      const links = await accountDB.all(`SELECT url, normalized_url, url_hash, group_name, link_type, status, verification_status, discovered_by_account, discovered_at, last_seen_at, scan_id FROM discovered_links ORDER BY discovered_at DESC LIMIT 10000`);
+      if (format === 'json') { res.setHeader('Content-Type','application/json; charset=utf-8'); res.setHeader('Content-Disposition',`attachment; filename=discovered_links_${accountId}.json`); return res.json({ success:true, links }); }
+      if (format === 'txt') { res.setHeader('Content-Type','text/plain; charset=utf-8'); res.setHeader('Content-Disposition',`attachment; filename=discovered_links_${accountId}.txt`); return res.send(links.map(l=>l.url).join('\\n')); }
+      const header='URL,NormalizedURL,Hash,GroupName,Type,Status,Verification,Account,DiscoveredAt,LastSeen,ScanID\\n'; const rows=links.map(l=>[l.url,l.normalized_url||'',l.url_hash||'',`"${String(l.group_name||'').replace(/"/g,'""')}"`,l.link_type,l.status,l.verification_status||'',l.discovered_by_account||'',l.discovered_at||'',l.last_seen_at||'',l.scan_id||''].join(',')).join('\\n');
+      res.setHeader('Content-Type','text/csv; charset=utf-8'); res.setHeader('Content-Disposition',`attachment; filename=discovered_links_${accountId}.csv`); return res.send('\\uFEFF'+header+rows);
+    } catch (err) { res.status(500).json({success:false,error:'تعذر تصدير نتائج مراقبة الروابط'}); }
   }
 
   // ══════════════════════════════════════════════════════════════════════════

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { io, Socket } from 'socket.io-client';
 import {
   Link as LinkIcon, Search, Download, RefreshCw, Trash2, Users,
   Clock, Calendar, CheckSquare, Square, Activity, Radio, Zap,
@@ -35,15 +36,23 @@ interface DiscoveredLink {
 }
 
 interface ScanJob {
-  status: 'idle' | 'running' | 'finished' | 'stopped' | 'error';
+  id?: string | null;
+  status: 'idle' | 'queued' | 'running' | 'waiting' | 'retrying' | 'processing' | 'paused' | 'finished' | 'stopped' | 'error';
   progress: number;
   total: number;
   scanned: number;
   found: number;
   duplicates: number;
+  invalid?: number;
+  review?: number;
+  retries?: number;
+  maxRetries?: number;
+  checkpointIndex?: number;
   currentChat: string | null;
   startedAt: string | null;
   finishedAt: string | null;
+  lastError?: string | null;
+  errorType?: string | null;
   log: { ts: string; msg: string; url?: string }[];
 }
 
@@ -129,6 +138,8 @@ export default function LinkDashboardView({ accountId }: { accountId: string | n
   const [scanJob, setScanJob] = useState<ScanJob | null>(null);
   const [scanAccounts, setScanAccounts] = useState<string[]>([]);
   const scanPollRef = useRef<any>(null);
+  const scanSocketRef = useRef<Socket | null>(null);
+  const [scanRealtime, setScanRealtime] = useState<'connected' | 'reconnecting' | 'offline'>('offline');
 
   // ── حالة الانضمام
   const [joinAccounts,    setJoinAccounts]    = useState<string[]>([]);
@@ -229,6 +240,24 @@ export default function LinkDashboardView({ accountId }: { accountId: string | n
     return () => clearInterval(scanPollRef.current);
   }, [scanJob?.status, fetchScanStatus]);
 
+  // تحديثات الفحص اللحظية مع إعادة الاتصال والمزامنة من API
+  useEffect(() => {
+    if (!accountId) return;
+    const socket = io(window.location.origin, { path: '/socket.io', transports: ['websocket', 'polling'], reconnection: true, reconnectionAttempts: Infinity });
+    scanSocketRef.current = socket;
+    const sync = () => { setScanRealtime('connected'); fetchScanStatus(); fetchStats(); };
+    socket.on('connect', sync);
+    socket.on('disconnect', () => setScanRealtime('reconnecting'));
+    socket.on('connect_error', () => setScanRealtime('reconnecting'));
+    socket.on(`link_scan_${accountId}`, (payload: any) => {
+      setScanRealtime('connected');
+      if (payload?.accountId && String(payload.accountId) !== String(accountId)) return;
+      setScanJob((current: any) => ({ ...(current || {}), ...payload, log: payload.lastLog ? [...(current?.log || []), payload.lastLog].slice(-100) : (current?.log || []) }));
+      if (['finished', 'stopped', 'error'].includes(payload?.status)) { fetchLinks(); fetchStats(); }
+    });
+    return () => { socket.disconnect(); scanSocketRef.current = null; setScanRealtime('offline'); };
+  }, [accountId, fetchScanStatus, fetchStats, fetchLinks]);
+
   // بحث بتأخير
   useEffect(() => {
     clearTimeout(searchRef.current);
@@ -257,6 +286,13 @@ export default function LinkDashboardView({ accountId }: { accountId: string | n
   const handleStopScan = async () => {
     if (!accountId) return;
     await authFetch(`${API}/accounts/${accountId}/links/scan/stop`, { method: 'POST' });
+    fetchScanStatus();
+  };
+  const handleScanAction = async (actionName: 'pause' | 'resume' | 'retry') => {
+    if (!accountId) return;
+    const r = await authFetch(`${API}/accounts/${accountId}/links/scan/${actionName}`, { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.success) setJoinResult({ success: false, error: d.error || 'تعذر تنفيذ إجراء الفحص' });
     fetchScanStatus();
   };
 
@@ -354,14 +390,13 @@ export default function LinkDashboardView({ accountId }: { accountId: string | n
     if (d.success) { fetchLinks(); fetchStats(); }
   };
 
-  const handleExportCSV = () => {
+  const handleExport = (format: 'csv' | 'txt' | 'json') => {
     if (!accountId) return;
-    const token = localStorage.getItem('wa_token');
-    const a = document.createElement('a');
-    a.href = `${API}/accounts/${accountId}/links/discovered/export/csv?token=${encodeURIComponent(token || '')}`;
-    a.download = `discovered_links_${accountId}.csv`;
-    a.click();
+    const token = localStorage.getItem('wa_token'); const a = document.createElement('a');
+    a.href = `${API}/accounts/${accountId}/links/discovered/export/${format}?token=${encodeURIComponent(token || '')}`;
+    a.download = `discovered_links_${accountId}.${format}`; a.click();
   };
+  const handleExportCSV = () => handleExport('csv');
 
   // ═════════════════════════════════════════════════════════════════════
   //  عرض: لا يوجد حساب
@@ -380,8 +415,10 @@ export default function LinkDashboardView({ accountId }: { accountId: string | n
     );
   }
 
-  const scanRunning = scanJob?.status === 'running';
+  const scanRunning = scanJob?.status === 'running' || scanJob?.status === 'processing' || scanJob?.status === 'retrying' || scanJob?.status === 'queued';
   const scanDone    = scanJob?.status === 'finished';
+  const scanPaused  = scanJob?.status === 'paused';
+  const scanError   = scanJob?.status === 'error';
   const typeMap: Record<string, number> = {};
   (stats?.byType || []).forEach(t => { typeMap[t.link_type] = t.cnt; });
 
@@ -395,6 +432,7 @@ export default function LinkDashboardView({ accountId }: { accountId: string | n
       <div className="flex flex-wrap items-start justify-between gap-3 flex-shrink-0">
         <div>
           <h1 className="text-2xl font-bold text-[var(--text-primary)]">مراقبة الروابط</h1>
+          <div className="mt-2 text-xs flex items-center gap-2"><span className={cn('w-2 h-2 rounded-full', scanRealtime === 'connected' ? 'bg-green-400' : scanRealtime === 'reconnecting' ? 'bg-yellow-400 animate-pulse' : 'bg-gray-500')} />{scanRealtime === 'connected' ? 'المراقبة اللحظية متصلة' : scanRealtime === 'reconnecting' ? 'جاري إعادة الاتصال والمزامنة...' : 'المراقبة اللحظية غير متصلة'}</div>
           <p className="text-[var(--text-secondary)] mt-1 text-sm">
             نظام احترافي لاكتشاف وإدارة روابط دعوة المجموعات والانضمام التلقائي
           </p>
@@ -411,22 +449,16 @@ export default function LinkDashboardView({ accountId }: { accountId: string | n
           </Button>
 
           {/* زر البحث التلقائي */}
-          {!scanRunning ? (
-            <Button
-              size="sm" className="h-9 gap-1.5 bg-blue-600 hover:bg-blue-700 border-0"
-              onClick={handleStartScan}
-            >
-              <Search className="w-4 h-4" />
-              بدء البحث عن الروابط
+          {!scanRunning && !scanPaused && !scanError ? (
+            <Button size="sm" className="h-9 gap-1.5 bg-blue-600 hover:bg-blue-700 border-0" onClick={handleStartScan}>
+              <Search className="w-4 h-4" /> بدء البحث عن الروابط
             </Button>
           ) : (
-            <Button
-              size="sm" variant="outline" className="h-9 gap-1.5 border-red-500/50 text-red-400"
-              onClick={handleStopScan}
-            >
-              <StopCircle className="w-4 h-4" />
-              إيقاف البحث
-            </Button>
+            <div className="flex gap-2">
+              {scanRunning && <Button size="sm" variant="outline" className="h-9 gap-1.5 border-yellow-500/50 text-yellow-400" onClick={() => handleScanAction('pause')}><PauseCircle className="w-4 h-4" /> إيقاف مؤقت</Button>}
+              {(scanPaused || scanError) && <Button size="sm" variant="outline" className="h-9 gap-1.5 border-blue-500/50 text-blue-400" onClick={() => handleScanAction(scanError ? 'retry' : 'resume')}><RotateCcw className="w-4 h-4" /> {scanError ? 'إعادة المحاولة' : 'استكمال'}</Button>}
+              {(scanRunning || scanPaused) && <Button size="sm" variant="outline" className="h-9 gap-1.5 border-red-500/50 text-red-400" onClick={handleStopScan}><StopCircle className="w-4 h-4" /> إيقاف البحث</Button>}
+            </div>
           )}
 
           {/* زر الانضمام */}
@@ -452,10 +484,9 @@ export default function LinkDashboardView({ accountId }: { accountId: string | n
           </Button>
 
           {/* تصدير */}
-          <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={handleExportCSV}>
-            <Download className="w-4 h-4" />
-            CSV
-          </Button>
+          <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={handleExportCSV}><Download className="w-4 h-4" /> CSV</Button>
+          <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={() => handleExport('txt')}>TXT</Button>
+          <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={() => handleExport('json')}>JSON</Button>
         </div>
       </div>
 
@@ -482,13 +513,17 @@ export default function LinkDashboardView({ accountId }: { accountId: string | n
                   </span>
                 )}
               </div>
-              <div className="flex items-center gap-3 text-xs text-[var(--text-secondary)]">
+              <div className="flex items-center gap-3 text-xs text-[var(--text-secondary)] flex-wrap">
+                {scanJob.id && <span>Job: <b className="text-[var(--text-primary)]">{scanJob.id}</b></span>}
                 <span>مفحوص: <b className="text-[var(--text-primary)]">{scanJob.scanned}/{scanJob.total}</b></span>
                 <span>وُجد: <b className="text-green-400">{scanJob.found}</b></span>
                 <span>مكرر: <b className="text-yellow-400">{scanJob.duplicates}</b></span>
+                <span>غير صالح: <b className="text-red-400">{scanJob.invalid || 0}</b></span>
+                <span>مراجعة: <b className="text-orange-400">{scanJob.review || 0}</b></span>
               </div>
             </div>
             <Progress value={scanJob.progress} className="h-2" />
+            {scanJob.lastError && <div className="mt-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">⚠️ {scanJob.lastError} {scanJob.retries !== undefined && `— المحاولة ${scanJob.retries}/${scanJob.maxRetries || 3}`}</div>}
 
             {/* آخر سجلات الفحص */}
             {scanJob.log && scanJob.log.length > 0 && (
