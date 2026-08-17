@@ -43,6 +43,10 @@ const TelegramMigrations = {
                 `ALTER TABLE telegram_auth_sessions ADD COLUMN IF NOT EXISTS last_error TEXT`,
                 `ALTER TABLE telegram_accounts ADD COLUMN IF NOT EXISTS bot_token TEXT`,
                 `ALTER TABLE telegram_accounts ADD COLUMN IF NOT EXISTS bot_username VARCHAR(100)`,
+                `ALTER TABLE telegram_keyword_results ADD COLUMN IF NOT EXISTS sender_access_hash TEXT`,
+                `ALTER TABLE telegram_keyword_results ADD COLUMN IF NOT EXISTS sender_first_name TEXT`,
+                `ALTER TABLE telegram_keyword_results ADD COLUMN IF NOT EXISTS sender_last_name TEXT`,
+                `ALTER TABLE telegram_keyword_results ADD COLUMN IF NOT EXISTS sender_peer_type VARCHAR(30)`,
                 `ALTER TABLE telegram_accounts ALTER COLUMN phone_number DROP NOT NULL`,
             ];
             for (const cmd of alterCmds) {
@@ -99,6 +103,7 @@ const TelegramMigrations = {
                     keyword_id UUID NOT NULL REFERENCES telegram_keywords(id) ON DELETE CASCADE,
                     telegram_account_id UUID NOT NULL REFERENCES telegram_accounts(id) ON DELETE CASCADE,
                     chat_id TEXT NOT NULL, message_id TEXT NOT NULL, sender_id TEXT,
+                    sender_access_hash TEXT, sender_first_name TEXT, sender_last_name TEXT, sender_peer_type VARCHAR(30),
                     sender_username TEXT, sender_name TEXT, sender_phone TEXT, message_text TEXT NOT NULL,
                     chat_title TEXT, chat_type VARCHAR(30), message_timestamp TIMESTAMPTZ,
                     detected_at TIMESTAMPTZ DEFAULT NOW(), reply_status VARCHAR(30) DEFAULT 'available',

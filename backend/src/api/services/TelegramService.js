@@ -155,16 +155,23 @@ const TelegramService = {
 
                     state.lastCheck = new Date();
 
-                    // اسم المجموعة/القناة
+                    // حفظ هوية المحادثة المصدر وهوية صاحب الرسالة من Telegram entity الحقيقي.
+                    let sourceChat = null;
                     let sourceGroup = '';
                     try {
-                        const chat = await event.getChat();
-                        sourceGroup = chat?.title || chat?.username || String(chat?.id || '');
+                        sourceChat = await event.getChat();
+                        sourceGroup = sourceChat?.title || sourceChat?.username || String(sourceChat?.id || '');
                     } catch {
                         sourceGroup = String(msg?.peerId?.channelId || msg?.peerId?.chatId || '');
                     }
-
-                    try { await require('./TelegramKeywordService').ingest(accountId, { text, message_id: String(msg.id || ''), chat_id: String(msg.peerId?.channelId || msg.peerId?.chatId || sourceGroup || ''), chat_title: sourceGroup, chat_type: event.isChannel ? 'channel' : 'group', sender_id: String(msg.senderId || ''), sender_username: msg.sender?.username || null, sender_name: [msg.sender?.firstName, msg.sender?.lastName].filter(Boolean).join(' ') || null, sender_phone: msg.sender?.phone || null, date: msg.date || new Date() }); } catch (keywordError) { console.warn(`[TelegramKeyword] ingest failed for ${accountId}: ${keywordError.message}`); }
+                    let sender = null;
+                    try { sender = typeof msg.getSender === 'function' ? await msg.getSender() : msg.sender || null; } catch {}
+                    const senderId = sender?.id ?? msg?.senderId ?? null;
+                    const senderAccessHash = sender?.accessHash ?? sender?.access_hash ?? null;
+                    const sourceChatId = sourceChat?.id ?? msg?.peerId?.channelId ?? msg?.peerId?.chatId ?? sourceGroup;
+                    const senderFirstName = sender?.firstName || sender?.first_name || null;
+                    const senderLastName = sender?.lastName || sender?.last_name || null;
+                    try { await require('./TelegramKeywordService').ingest(accountId, { text, message_id: String(msg.id || ''), chat_id: String(sourceChatId || ''), chat_title: sourceGroup, chat_type: event.isChannel ? 'channel' : 'group', sender_id: senderId == null ? null : String(senderId), sender_access_hash: senderAccessHash == null ? null : String(senderAccessHash), sender_first_name: senderFirstName, sender_last_name: senderLastName, sender_peer_type: sender?.className === 'User' ? 'user' : 'unknown', sender_username: sender?.username || null, sender_name: [senderFirstName, senderLastName].filter(Boolean).join(' ') || null, sender_phone: sender?.phone || null, date: msg.date || new Date() }); } catch (keywordError) { console.warn(`[TelegramKeyword] ingest failed for ${accountId}: ${keywordError.message}`); }
 
                     const rawLinks = text.match(WA_LINK_PATTERN) || [];
                     let saved = 0;

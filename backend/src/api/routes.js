@@ -264,6 +264,8 @@ router.post('/auto-search/:action', auth, AutoSearchController.control.bind(Auto
 router.get('/auto-search/settings', auth, AutoSearchController.dashboard.bind(AutoSearchController));
 router.post('/auto-search/settings', auth, AutoSearchController.settings.bind(AutoSearchController));
 router.get('/auto-search/links', auth, AutoSearchController.links.bind(AutoSearchController));
+router.get('/auto-search/health', auth, AutoSearchController.health.bind(AutoSearchController));
+router.get('/auto-search/export', auth, AutoSearchController.export.bind(AutoSearchController));
 router.post('/auto-search/copy', auth, AutoSearchController.copy.bind(AutoSearchController));
 
 const LinkJoinController = require('./controllers/LinkJoinController');
@@ -569,6 +571,7 @@ router.get   ("/telegram-keywords/workers",            auth, TelegramKeywordCont
 router.post  ("/telegram-keywords",                    auth, TelegramKeywordController.create.bind(TelegramKeywordController));
 router.put   ("/telegram-keywords/:id",                auth, TelegramKeywordController.update.bind(TelegramKeywordController));
 router.delete("/telegram-keywords/:id",                auth, TelegramKeywordController.remove.bind(TelegramKeywordController));
+router.post  ("/telegram-keywords/results/:id/open",   auth, TelegramKeywordController.openDirectChat.bind(TelegramKeywordController));
 router.post  ("/telegram-keywords/results/:id/reply",  auth, TelegramKeywordController.reply.bind(TelegramKeywordController));
 
 // ── روابط واتساب المكتشفة (تتطلب مصادقة) ───────────

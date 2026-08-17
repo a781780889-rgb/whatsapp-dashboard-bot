@@ -67,7 +67,7 @@ const Service = {
       const chatType = String(message.chat_type || (message.is_channel ? 'channel' : 'group'));
       if (chatType === 'channel' && !keyword.search_channels) continue; if (chatType !== 'channel' && !keyword.search_groups) continue;
       if (!matches(text, keyword)) continue;
-      const result = await queryOne(`INSERT INTO telegram_keyword_results(user_id,keyword_id,telegram_account_id,chat_id,message_id,sender_id,sender_username,sender_name,sender_phone,message_text,chat_title,chat_type,message_timestamp) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(telegram_account_id,chat_id,message_id,keyword_id) DO NOTHING RETURNING *`, [account.user_id, keyword.id, accountId, String(message.chat_id || message.chatId || ''), String(message.message_id || message.id || uuidv4()), message.sender_id || null, message.sender_username || null, message.sender_name || null, message.sender_phone || null, text, message.chat_title || message.chat_name || '', chatType, message.date ? new Date(message.date) : new Date()]);
+      const result = await queryOne(`INSERT INTO telegram_keyword_results(user_id,keyword_id,telegram_account_id,chat_id,message_id,sender_id,sender_access_hash,sender_first_name,sender_last_name,sender_peer_type,sender_username,sender_name,sender_phone,message_text,chat_title,chat_type,message_timestamp) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT(telegram_account_id,chat_id,message_id,keyword_id) DO NOTHING RETURNING *`, [account.user_id, keyword.id, accountId, String(message.chat_id || message.chatId || ''), String(message.message_id || message.id || uuidv4()), message.sender_id || null, message.sender_access_hash || null, message.sender_first_name || null, message.sender_last_name || null, message.sender_peer_type || 'user', message.sender_username || null, message.sender_name || null, message.sender_phone || null, text, message.chat_title || message.chat_name || '', chatType, message.date ? new Date(message.date) : new Date()]);
       if (!result) continue; matched++;
       await query(`INSERT INTO telegram_keyword_events(user_id,telegram_account_id,event_type,result_id,payload) VALUES($1,$2,'matched',$3,$4)`, [account.user_id, accountId, result.id, JSON.stringify({ keyword: keyword.keyword, chat_id: result.chat_id })]).catch(() => {});
       SocketBridge.to(`user:${account.user_id}`).emit('telegram:keyword:matched', { result, keyword: { id: keyword.id, keyword: keyword.keyword }, account: safeAccount(account) });
@@ -75,12 +75,34 @@ const Service = {
     if (matched) await query(`UPDATE telegram_accounts SET last_activity_at=NOW(),updated_at=NOW() WHERE id=$1`, [accountId]).catch(() => {});
     return { matched };
   },
+  async _resolvePrivatePeer(result) {
+    if (!result.sender_id) throw Object.assign(new Error('لا يوجد معرف Telegram موثوق لهذا المرسل'), { code: 'SENDER_ID_MISSING' });
+    const worker = TelegramService.getWorker?.(result.telegram_account_id);
+    if (!worker?.client || worker.status !== 'running') throw Object.assign(new Error('الحساب المصدر غير متصل'), { code: 'ACCOUNT_OFFLINE' });
+    const { Api } = require('telegram');
+    try {
+      const userId = BigInt(String(result.sender_id).replace(/n$/, ''));
+      const accessHash = result.sender_access_hash ? BigInt(String(result.sender_access_hash).replace(/n$/, '')) : null;
+      const peer = accessHash === null ? await worker.client.getInputEntity(userId) : new Api.InputPeerUser({ userId, accessHash });
+      await worker.client.getEntity(peer);
+      return { worker, peer };
+    } catch (err) {
+      throw Object.assign(new Error('تعذر التحقق من هوية مستخدم Telegram أو فتح محادثته الخاصة'), { code: 'SENDER_RESOLVE_FAILED', cause: err });
+    }
+  },
+  async openDirectChat(userId, resultId) {
+    const result = await queryOne(`SELECT r.*,a.name AS account_name,a.status AS account_status FROM telegram_keyword_results r JOIN telegram_accounts a ON a.id=r.telegram_account_id WHERE r.id=$1 AND r.user_id=$2`, [resultId, userId]);
+    if (!result) throw Object.assign(new Error('نتيجة الاكتشاف غير موجودة'), { code: 'RESULT_NOT_FOUND' });
+    await this._resolvePrivatePeer(result);
+    const username = String(result.sender_username || '').replace(/^@/, '').trim();
+    const directLink = username ? `https://t.me/${encodeURIComponent(username)}` : `tg://user?id=${encodeURIComponent(String(result.sender_id))}`;
+    return { chatOpened: true, telegramUserId: String(result.sender_id), telegramAccountId: String(result.telegram_account_id), directLink, username: username || null };
+  },
   async reply(userId, resultId, text) {
     const result = await queryOne(`SELECT r.*,a.name AS account_name FROM telegram_keyword_results r JOIN telegram_accounts a ON a.id=r.telegram_account_id WHERE r.id=$1 AND r.user_id=$2`, [resultId, userId]);
     if (!result) throw new Error('نتيجة الاكتشاف غير موجودة'); if (!text || !String(text).trim()) throw new Error('نص الرد مطلوب');
-    const worker = TelegramService.getWorker?.(result.telegram_account_id); if (!worker?.client || worker.status !== 'running') throw new Error('الحساب المصدر غير متصل');
-    try { await worker.client.sendMessage(result.chat_id, { message: String(text).trim(), replyTo: Number(result.message_id) || undefined }); await query(`UPDATE telegram_keyword_results SET reply_status='sent',replied_at=NOW(),reply_error=NULL WHERE id=$1 AND user_id=$2`, [resultId, userId]); return { sent: true }; }
-    catch (err) { await query(`UPDATE telegram_keyword_results SET reply_status='failed',reply_error=$3 WHERE id=$1 AND user_id=$2`, [resultId, userId, err.message]); throw new Error('فشل إرسال الرد عبر الحساب المصدر'); }
+    try { const { worker, peer } = await this._resolvePrivatePeer(result); await worker.client.sendMessage(peer, { message: String(text).trim() }); await query(`UPDATE telegram_keyword_results SET reply_status='sent',replied_at=NOW(),reply_error=NULL WHERE id=$1 AND user_id=$2`, [resultId, userId]); return { sent: true, telegramUserId: String(result.sender_id), chatOpened: true }; }
+    catch (err) { await query(`UPDATE telegram_keyword_results SET reply_status='failed',reply_error=$3 WHERE id=$1 AND user_id=$2`, [resultId, userId, err.message]); throw err.code ? err : new Error('فشل إرسال الرد الخاص عبر الحساب المصدر'); }
   },
 };
 module.exports = Service;
