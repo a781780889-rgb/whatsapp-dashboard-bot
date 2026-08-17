@@ -543,10 +543,16 @@ router.post('/ai-center/events', auth, AIAutomationController.event.bind(AIAutom
 // ══════════════════════════════════════════════════════
 const TelegramController = require("./controllers/TelegramController");
 const TelegramKeywordController = require("./controllers/TelegramKeywordController");
+const TelegramAuthController = require("./controllers/TelegramAuthController");
 
 // ── حسابات تيليجرام (تتطلب مصادقة) ────────────────
 // ⚠️ المسارات الثابتة أولاً (workers/stats) قبل /:id
 router.post  ("/telegram/accounts",                    auth, TelegramController.addAccount.bind(TelegramController));
+router.post  ("/telegram/auth/request-code",             auth, TelegramAuthController.requestCode.bind(TelegramAuthController));
+router.post  ("/telegram/auth/:id/verify-code",           auth, TelegramAuthController.verifyCode.bind(TelegramAuthController));
+router.post  ("/telegram/auth/:id/verify-2fa",            auth, TelegramAuthController.verify2fa.bind(TelegramAuthController));
+router.get   ("/telegram/auth/:id/status",                auth, TelegramAuthController.status.bind(TelegramAuthController));
+router.delete("/telegram/auth/:id",                       auth, TelegramAuthController.cancel.bind(TelegramAuthController));
 router.get   ("/telegram/accounts",                    auth, TelegramController.listAccounts.bind(TelegramController));
 router.get   ("/telegram/accounts/workers",            auth, TelegramController.getWorkersStatus.bind(TelegramController));
 router.get   ("/telegram/accounts/stats",              auth, TelegramController.getStats.bind(TelegramController));

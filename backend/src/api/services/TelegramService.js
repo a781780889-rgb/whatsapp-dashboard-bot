@@ -15,6 +15,7 @@
 const { query, queryOne, queryAll } = require('../../lib/postgres');
 const { v4: uuidv4 } = require('uuid');
 const SocketBridge = require('../../core/SocketBridge');
+const { decrypt } = require('./TelegramSessionCrypto');
 
 // ── Regex روابط واتساب ───────────────────────────────────────────────────────
 const WA_LINK_PATTERN = /https?:\/\/(?:chat\.whatsapp\.com|wa\.me|api\.whatsapp\.com\/send)[^\s\])"'>]*/gi;
@@ -52,8 +53,11 @@ const TelegramService = {
             return;
         }
 
-        if (!account.api_id || !account.api_hash || !account.session_string) {
-            console.warn(`[TelegramService] Account ${account.name} missing api_id/api_hash/session_string`);
+        const apiId = account.api_id || process.env.TELEGRAM_API_ID;
+        const apiHash = account.api_hash || process.env.TELEGRAM_API_HASH;
+        const storedSession = account.session_encrypted || account.session_string;
+        if (!apiId || !apiHash || !storedSession) {
+            console.warn(`[TelegramService] Account ${account.name} missing Telegram credentials/session`);
             await query(
                 `UPDATE telegram_accounts SET status='disconnected', updated_at=NOW() WHERE id=$1`, [id]
             ).catch(() => {});
@@ -86,13 +90,16 @@ const TelegramService = {
     // ── الاتصال والاستماع ────────────────────────────────────────────────────
     async _connectAndListen(accountId, state) {
         const account = state.account;
+        const apiId = account.api_id || process.env.TELEGRAM_API_ID;
+        const apiHash = account.api_hash || process.env.TELEGRAM_API_HASH;
+        const storedSession = account.session_encrypted || account.session_string;
 
         try {
-            const session = new StringSession(account.session_string);
+            const session = new StringSession(decrypt(storedSession));
             const client  = new TelegramClient(
                 session,
-                parseInt(account.api_id),
-                account.api_hash,
+                parseInt(apiId),
+                apiHash,
                 {
                     connectionRetries: 5,
                     retryDelay:        3000,
@@ -415,9 +422,7 @@ const TelegramService = {
         try {
             const accounts = await queryAll(
                 `SELECT * FROM telegram_accounts
-                 WHERE session_string IS NOT NULL
-                   AND api_id IS NOT NULL
-                   AND api_hash IS NOT NULL
+                 WHERE COALESCE(session_encrypted, session_string) IS NOT NULL
                    AND status != 'disabled'`
             );
             for (const acc of accounts) {

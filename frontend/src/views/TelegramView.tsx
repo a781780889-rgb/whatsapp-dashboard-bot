@@ -12,6 +12,7 @@ import { API, authFetch } from '../utils/api';
 import { useToast } from '../components/ui/ToastProvider';
 import { io, Socket } from 'socket.io-client';
 import { cn } from '@/utils/cn';
+import TelegramAuthModal from '@/components/TelegramAuthModal';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface TelegramAccount {
@@ -761,10 +762,9 @@ export default function TelegramView() {
 
       {/* Modals */}
       {showModal && (
-        <AccountModal
-          account={editAccount}
+        <TelegramAuthModal
           onClose={() => { setShowModal(false); setEditAccount(null); }}
-          onSave={() => { setShowModal(false); setEditAccount(null); fetchAccounts(); fetchStats(); }}
+          onComplete={() => { setShowModal(false); setEditAccount(null); fetchAccounts(); fetchStats(); }}
         />
       )}
       {infoLink && <LinkInfoModal link={infoLink} onClose={() => setInfoLink(null)} />}

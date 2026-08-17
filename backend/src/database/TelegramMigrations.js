@@ -31,8 +31,15 @@ const TelegramMigrations = {
                 )
             `);
 
-            // ── إضافة أعمدة جديدة إذا كان الجدول موجوداً مسبقاً ────────
+            // ── أعمدة المصادقة الحديثة ─────────────────────────────────
             const alterCmds = [
+                `ALTER TABLE telegram_accounts ADD COLUMN IF NOT EXISTS session_encrypted TEXT`,
+                `ALTER TABLE telegram_accounts ADD COLUMN IF NOT EXISTS telegram_user_id TEXT`,
+                `ALTER TABLE telegram_accounts ADD COLUMN IF NOT EXISTS username VARCHAR(200)`,
+                `ALTER TABLE telegram_accounts ADD COLUMN IF NOT EXISTS first_name VARCHAR(200)`,
+                `ALTER TABLE telegram_accounts ADD COLUMN IF NOT EXISTS last_name VARCHAR(200)`,
+                `ALTER TABLE telegram_accounts ADD COLUMN IF NOT EXISTS last_connected_at TIMESTAMPTZ`,
+                `ALTER TABLE telegram_accounts ADD COLUMN IF NOT EXISTS auth_required BOOLEAN NOT NULL DEFAULT false`,
                 `ALTER TABLE telegram_accounts ADD COLUMN IF NOT EXISTS bot_token TEXT`,
                 `ALTER TABLE telegram_accounts ADD COLUMN IF NOT EXISTS bot_username VARCHAR(100)`,
                 `ALTER TABLE telegram_accounts ALTER COLUMN phone_number DROP NOT NULL`,
@@ -40,6 +47,17 @@ const TelegramMigrations = {
             for (const cmd of alterCmds) {
                 await query(cmd).catch(() => {}); // تجاهل أخطاء "already exists"
             }
+            await query(`
+                CREATE TABLE IF NOT EXISTS telegram_auth_sessions (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL,
+                    phone_reference TEXT NOT NULL, phone_code_hash TEXT,
+                    state VARCHAR(32) NOT NULL DEFAULT 'created', client_reference TEXT,
+                    expires_at TIMESTAMPTZ NOT NULL, attempts INT NOT NULL DEFAULT 0,
+                    created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            `);
+            await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_tg_auth_active_phone ON telegram_auth_sessions(user_id,phone_reference) WHERE state IN ('created','code_requested','waiting_code','verifying','waiting_2fa')`).catch(() => {});
+            await query(`CREATE INDEX IF NOT EXISTS idx_tg_auth_expiry ON telegram_auth_sessions(expires_at)`).catch(() => {});
 
             // ── جدول روابط واتساب المكتشفة ──────────────────────────────
             await query(`

@@ -11,6 +11,8 @@ const TelegramController = {
 
     // ── إضافة حساب تيليجرام ──────────────────────────────────────────────────
     async addAccount(req, res) {
+        return res.status(410).json({ success: false, error: 'استخدم تسجيل الدخول عبر رقم الهاتف وطلب كود Telegram من الواجهة الجديدة' });
+        /* legacy flow intentionally disabled
         try {
             const { name, phone_number, api_id, api_hash, session_string, bot_token, notes } = req.body;
             const userId = req.user.id;
@@ -47,6 +49,7 @@ const TelegramController = {
             console.error('[TelegramController.addAccount]', err.message);
             return res.status(500).json({ success: false, error: err.message });
         }
+        */
     },
 
     // ── قائمة الحسابات ────────────────────────────────────────────────────────
@@ -63,11 +66,10 @@ const TelegramController = {
                   );
 
             // إخفاء bot_token الكامل من الاستجابة (أمان)
-            const safe = accounts.map(a => ({
-                ...a,
-                bot_token: a.bot_token ? `${a.bot_token.slice(0, 10)}...` : null,
-                session_string: a.session_string ? '***' : null,
-            }));
+            const safe = accounts.map(a => {
+                const { session_string, session_encrypted, api_hash, bot_token, ...publicAccount } = a;
+                return { ...publicAccount, bot_token: bot_token ? `${bot_token.slice(0, 10)}...` : null };
+            });
 
             return res.json({ success: true, accounts: safe });
         } catch (err) {
@@ -81,9 +83,9 @@ const TelegramController = {
             const { id } = req.params;
             const account = await queryOne(`SELECT * FROM telegram_accounts WHERE id = $1`, [id]);
             if (!account) return res.status(404).json({ success: false, error: 'الحساب غير موجود' });
-            // إخفاء bot_token
-            account.bot_token = account.bot_token ? `${account.bot_token.slice(0, 10)}...` : null;
-            return res.json({ success: true, account });
+            const { session_string, session_encrypted, api_hash, bot_token, ...publicAccount } = account;
+            publicAccount.bot_token = bot_token ? `${bot_token.slice(0, 10)}...` : null;
+            return res.json({ success: true, account: publicAccount });
         } catch (err) {
             return res.status(500).json({ success: false, error: err.message });
         }
@@ -155,7 +157,7 @@ const TelegramController = {
             const { id } = req.params;
             const account = await queryOne(`SELECT * FROM telegram_accounts WHERE id = $1`, [id]);
             if (!account) return res.status(404).json({ success: false, error: 'الحساب غير موجود' });
-            if (!account.session_string || !account.api_id || !account.api_hash) {
+            if (!(account.session_encrypted || account.session_string) || !(account.api_id || process.env.TELEGRAM_API_ID) || !(account.api_hash || process.env.TELEGRAM_API_HASH)) {
                 return res.status(400).json({ success: false, error: 'لا يوجد session_string صالح. شغّل gen_session.js أولاً' });
             }
 

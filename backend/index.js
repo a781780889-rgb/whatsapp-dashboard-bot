@@ -329,6 +329,8 @@ async function bootstrap() {
         await JobScheduler.start();
 
     // ── Telegram Workers ──────────────────────────────────────────────────────
+    const TelegramAuthService = require('./src/api/services/TelegramAuthService');
+    TelegramAuthService.startCleanup();
     TelegramService.initAllWorkers().catch(err => console.error('[Telegram] Init error:', err.message));
 
         // 5b. [FIX-20] Start QueueManager — نظام Queue المركزي
@@ -387,6 +389,7 @@ function setupGracefulShutdown() {
             // [FIX-20] إيقاف QueueManager قبل RedisManager
             LinkImportService.stopWorker();
             try { require('./src/api/services/KeywordMonitoringService').stopWorker(); } catch {}
+            try { require('./src/api/services/TelegramAuthService').stopCleanup(); } catch {}
             try { require('./src/api/services/GroupNumberService').stopWorker(); } catch {}
             try { require('./src/api/services/AIAutomationService').stopWorker(); } catch {}
             try { require('./src/api/services/AutoSearchService').stopWorker(); } catch {}
