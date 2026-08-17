@@ -157,8 +157,10 @@ const TelegramController = {
             const { id } = req.params;
             const account = await queryOne(`SELECT * FROM telegram_accounts WHERE id = $1`, [id]);
             if (!account) return res.status(404).json({ success: false, error: 'الحساب غير موجود' });
-            if (!(account.session_encrypted || account.session_string) || !(account.api_id || process.env.TELEGRAM_API_ID) || !(account.api_hash || process.env.TELEGRAM_API_HASH)) {
-                return res.status(400).json({ success: false, error: 'لا يوجد session_string صالح. شغّل gen_session.js أولاً' });
+            const configuredApiId = account.api_id || process.env.TELEGRAM_API_ID || process.env.TELEGRAM_APP_ID || process.env.TELEGRAM_APIID;
+            const configuredApiHash = account.api_hash || process.env.TELEGRAM_API_HASH || process.env.TELEGRAM_APP_HASH || process.env.TELEGRAM_APIHASH;
+            if (!(account.session_encrypted || account.session_string) || !configuredApiId || !configuredApiHash) {
+                return res.status(400).json({ success: false, error: 'إعدادات Telegram API غير مهيأة في الخادم. اضبط TELEGRAM_API_ID و TELEGRAM_API_HASH في Railway.' });
             }
 
             await TelegramService.startWorker(account);

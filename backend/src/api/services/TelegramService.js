@@ -53,8 +53,8 @@ const TelegramService = {
             return;
         }
 
-        const apiId = account.api_id || process.env.TELEGRAM_API_ID;
-        const apiHash = account.api_hash || process.env.TELEGRAM_API_HASH;
+        const apiId = account.api_id || process.env.TELEGRAM_API_ID || process.env.TELEGRAM_APP_ID || process.env.TELEGRAM_APIID;
+        const apiHash = account.api_hash || process.env.TELEGRAM_API_HASH || process.env.TELEGRAM_APP_HASH || process.env.TELEGRAM_APIHASH;
         const storedSession = account.session_encrypted || account.session_string;
         if (!apiId || !apiHash || !storedSession) {
             console.warn(`[TelegramService] Account ${account.name} missing Telegram credentials/session`);
@@ -90,8 +90,8 @@ const TelegramService = {
     // ── الاتصال والاستماع ────────────────────────────────────────────────────
     async _connectAndListen(accountId, state) {
         const account = state.account;
-        const apiId = account.api_id || process.env.TELEGRAM_API_ID;
-        const apiHash = account.api_hash || process.env.TELEGRAM_API_HASH;
+        const apiId = account.api_id || process.env.TELEGRAM_API_ID || process.env.TELEGRAM_APP_ID || process.env.TELEGRAM_APIID;
+        const apiHash = account.api_hash || process.env.TELEGRAM_API_HASH || process.env.TELEGRAM_APP_HASH || process.env.TELEGRAM_APIHASH;
         const storedSession = account.session_encrypted || account.session_string;
 
         try {

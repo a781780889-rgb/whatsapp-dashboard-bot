@@ -10,7 +10,12 @@ const active = new Map();
 const limits = new Map();
 const TTL = 10 * 60 * 1000;
 const MAX_ATTEMPTS = 5;
-function env(){ const apiId=Number(process.env.TELEGRAM_API_ID); const apiHash=String(process.env.TELEGRAM_API_HASH||''); if(!apiId || !apiHash) throw new Error('إعدادات Telegram API غير مهيأة في الخادم'); return {apiId,apiHash}; }
+function env(){
+ const apiId=Number(process.env.TELEGRAM_API_ID || process.env.TELEGRAM_APP_ID || process.env.TELEGRAM_APIID || 0);
+ const apiHash=String(process.env.TELEGRAM_API_HASH || process.env.TELEGRAM_APP_HASH || process.env.TELEGRAM_APIHASH || '').trim();
+ if(!Number.isInteger(apiId) || apiId <= 0 || !apiHash) throw new Error('إعدادات Telegram API غير مهيأة في الخادم. اضبط TELEGRAM_API_ID و TELEGRAM_API_HASH في Railway.');
+ return {apiId,apiHash};
+}
 function phone(value){ const p=String(value||'').replace(/[\s().-]/g,''); if(!/^\+[1-9]\d{7,14}$/.test(p)) throw new Error('أدخل رقم Telegram بصيغة دولية صحيحة مثل +967XXXXXXXXX'); return p; }
 function safeError(err){ const code=String(err?.errorMessage||err?.message||''); if(/PHONE_CODE_INVALID/i.test(code)) return 'رمز التحقق غير صحيح'; if(/PHONE_CODE_EXPIRED/i.test(code)) return 'انتهت صلاحية رمز التحقق'; if(/PHONE_NUMBER_INVALID/i.test(code)) return 'رقم الهاتف غير صالح'; if(/SESSION_PASSWORD_NEEDED/i.test(code)) return 'الحساب محمي بالتحقق بخطوتين'; if(/FLOOD_WAIT/i.test(code)) return 'طلب Telegram مهلة مؤقتة. حاول لاحقاً'; if(/AUTH_KEY_UNREGISTERED|SESSION_REVOKED/i.test(code)) return 'تعذر إنشاء جلسة Telegram'; return 'تعذر إكمال مصادقة Telegram'; }
 function deferred(){ let resolve,reject; const promise=new Promise((r,j)=>{resolve=r;reject=j}); return {promise,resolve,reject}; }
