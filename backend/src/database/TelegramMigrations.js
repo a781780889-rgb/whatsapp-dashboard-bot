@@ -40,6 +40,7 @@ const TelegramMigrations = {
                 `ALTER TABLE telegram_accounts ADD COLUMN IF NOT EXISTS last_name VARCHAR(200)`,
                 `ALTER TABLE telegram_accounts ADD COLUMN IF NOT EXISTS last_connected_at TIMESTAMPTZ`,
                 `ALTER TABLE telegram_accounts ADD COLUMN IF NOT EXISTS auth_required BOOLEAN NOT NULL DEFAULT false`,
+                `ALTER TABLE telegram_auth_sessions ADD COLUMN IF NOT EXISTS last_error TEXT`,
                 `ALTER TABLE telegram_accounts ADD COLUMN IF NOT EXISTS bot_token TEXT`,
                 `ALTER TABLE telegram_accounts ADD COLUMN IF NOT EXISTS bot_username VARCHAR(100)`,
                 `ALTER TABLE telegram_accounts ALTER COLUMN phone_number DROP NOT NULL`,
@@ -52,7 +53,7 @@ const TelegramMigrations = {
                     id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL,
                     phone_reference TEXT NOT NULL, phone_code_hash TEXT,
                     state VARCHAR(32) NOT NULL DEFAULT 'created', client_reference TEXT,
-                    expires_at TIMESTAMPTZ NOT NULL, attempts INT NOT NULL DEFAULT 0,
+                    expires_at TIMESTAMPTZ NOT NULL, attempts INT NOT NULL DEFAULT 0, last_error TEXT,
                     created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW()
                 )
             `);
