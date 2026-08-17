@@ -2,19 +2,36 @@ const DatabaseManager = require('../../database/DatabaseManager');
 const WhatsAppManager = require('../../bot/WhatsAppManager');
 const GroupJoinerService = require('./GroupJoinerService');
 const { getPool } = require('../../lib/postgres');
-const { randomUUID } = require('crypto');
+const { randomUUID, createHash } = require('crypto');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { spawn, execFileSync } = require('child_process');
 const AdmZip = require('adm-zip');
 const SocketBridge = require('../../core/SocketBridge');
 
 const jobs = new Map();
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+const SUPPORTED_EXTENSIONS = new Set(['txt','csv','json','xlsx','docx','pdf','zip']);
+const MAX_FILE_BYTES = 25 * 1024 * 1024;
 function normaliseUrl(value) {
-  const url = String(value || '').trim();
-  if (!url) return null;
-  const match = url.match(/https?:\/\/[^\s]+/i);
-  return match ? match[0].replace(/[),.;]+$/, '') : null;
+  const match = String(value || '').trim().match(/https?:\/\/[^\s<>()]+/i);
+  if (!match) return null;
+  try {
+    const parsed = new URL(match[0].replace(/[),.;!?؟]+$/g, ''));
+    parsed.protocol = 'https:';
+    parsed.hostname = parsed.hostname.toLowerCase();
+    parsed.hash = '';
+    for (const key of [...parsed.searchParams.keys()]) if (/^(utm_|fbclid$|gclid$|ref$)/i.test(key)) parsed.searchParams.delete(key);
+    parsed.pathname = parsed.pathname.replace(/\/{2,}/g, '/').replace(/\/$/, '');
+    return parsed.toString().replace(/\/$/, '');
+  } catch { return null; }
 }
+function urlHash(url) { return createHash('sha256').update(String(url || '')).digest('hex'); }
+function extension(fileName) { return String(fileName || '').toLowerCase().split('.').pop() || ''; }
+function decodeContent(content, encoding = 'text') { return encoding === 'base64' ? Buffer.from(String(content || ''), 'base64') : Buffer.from(String(content || ''), 'utf8'); }
+function textContent(content, encoding = 'text') { return decodeContent(content, encoding).toString('utf8'); }
 function inviteCode(url) { return String(url || '').match(/(?:chat\.whatsapp\.com\/|whatsapp\.com\/invite\/)([A-Za-z0-9_-]{20,})/i)?.[1] || null; }
 function extractDocxText(base64) {
   const zip = new AdmZip(Buffer.from(String(base64 || ''), 'base64')); const entries = zip.getEntries();
@@ -25,10 +42,12 @@ function extractDocxText(base64) {
   const inline = [...xmlParts.join('\n').matchAll(/https?:\/\/[^\s"'<]+/gi)].map(m => m[0]);
   return [text, ...targets, ...inline].join('\n');
 }
-function extractInboundValues(content, fileName = '') {
-  const ext = String(fileName).toLowerCase().split('.').pop();
-  if (ext === 'docx') return [...new Set(extractDocxText(content).match(/https?:\/\/[^\s"'<]+/gi) || [])];
-  const raw = String(content || '');
+function extractXlsxText(buffer) { try { const zip = new AdmZip(buffer); return zip.getEntries().filter(e => /xl\/(sharedStrings|worksheets\/sheet\d+)\.xml$/i.test(e.entryName)).map(e => e.getData().toString('utf8')).join('\n').replace(/<[^>]+>/g, ' '); } catch { return ''; } }
+function extractPdfText(buffer) { const file=path.join(os.tmpdir(),`link-import-${randomUUID()}.pdf`); try { fs.writeFileSync(file,buffer); return execFileSync('pdftotext',['-layout',file,'-'],{encoding:'utf8',timeout:30000}); } catch { return ''; } finally { try { fs.unlinkSync(file); } catch {} } }
+function extractZipText(buffer) { const zip = new AdmZip(buffer); const values=[]; for (const entry of zip.getEntries()) { if (entry.isDirectory) continue; const ext=extension(entry.entryName); if (!SUPPORTED_EXTENSIONS.has(ext)||ext==='zip') continue; const data=entry.getData(); if (ext==='docx') values.push(extractDocxText(data.toString('base64'))); else if (ext==='xlsx') values.push(extractXlsxText(data)); else if (ext==='pdf') values.push(extractPdfText(data)); else values.push(data.toString('utf8')); } return values.join('\n'); }
+function extractInboundValues(content, fileName = '', encoding = 'text') {
+  const ext = extension(fileName); const implicitBinary = ['docx','xlsx','pdf','zip'].includes(ext) && encoding === 'text' && /^[A-Za-z0-9+/=\r\n]+$/.test(String(content || '')) && String(content || '').length > 64; const binary = implicitBinary ? Buffer.from(String(content || ''), 'base64') : decodeContent(content, encoding); const raw = (ext === 'docx' ? extractDocxText(binary.toString('base64')) : ext === 'xlsx' ? extractXlsxText(binary) : ext === 'pdf' ? extractPdfText(binary) : ext === 'zip' ? extractZipText(binary) : binary.toString('utf8'));
+  if (ext === 'docx') return [...new Set(raw.match(/https?:\/\/[^\s"'<]+/gi) || [])];
   if (ext === 'json') { try { const parsed = JSON.parse(raw); const values=[]; const walk=v=>{if(typeof v==='string')values.push(v); else if(Array.isArray(v))v.forEach(walk); else if(v&&typeof v==='object')Object.values(v).forEach(walk);}; walk(parsed); return values; } catch { return raw.split(/\r?\n/); } }
   if (ext === 'csv') return raw.split(/\r?\n/).flatMap(line => line.split(/[;,\t]/));
   return raw.split(/\r?\n/);
@@ -36,32 +55,38 @@ function extractInboundValues(content, fileName = '') {
 
 class LinkImportService {
   constructor() { this._workerTimer = null; this._workerBusy = false; }
-  async importFile({ accountId, fileName, content }) {
-    const db = await DatabaseManager.getAccountDB(accountId); const seen = new Set(); const links=[]; let duplicateCount=0; let invalidCount=0;
-    for (const line of extractInboundValues(content, fileName)) { const url=normaliseUrl(line); if(!url||!inviteCode(url)){if(String(line).trim())invalidCount++;continue;} const key=url.toLowerCase(); if(seen.has(key)){duplicateCount++;continue;} seen.add(key); links.push(url); }
-    const file=await db.query(`INSERT INTO link_import_files(file_name,file_size,total_links,valid_links,duplicate_links,invalid_links,status) VALUES($1,$2,$3,$4,$5,$6,'ready') RETURNING *`,[fileName||'links.txt',Buffer.byteLength(String(content||''),'utf8'),links.length+duplicateCount+invalidCount,links.length,duplicateCount,invalidCount]);
-    for (const url of links) await db.query(`INSERT INTO link_import_items(file_id,url,status) VALUES($1,$2,'pending') ON CONFLICT(file_id,url) DO NOTHING`,[file.rows[0].id,url]);
-    return { file:file.rows[0], preview:links.slice(0,100).map((url,i)=>({index:i+1,url,status:'pending'})) };
+  async importFile({ accountId, fileName, content, encoding = 'text', importPolicy = 'ignore_duplicates', sourceType = 'file' }) {
+    const ext=extension(fileName); if(!SUPPORTED_EXTENSIONS.has(ext)) throw new Error('نوع الملف غير مدعوم. الأنواع المسموحة: TXT, CSV, JSON, XLSX, DOCX, PDF, ZIP');
+    const binary=decodeContent(content,encoding); if(!binary.length) throw new Error('الملف فارغ'); if(binary.length>MAX_FILE_BYTES) throw new Error('حجم الملف يتجاوز الحد المسموح 25MB');
+    const db = await DatabaseManager.getAccountDB(accountId); const seen = new Set(); const records=[]; let duplicateCount=0; let invalidCount=0;
+    for (const line of extractInboundValues(content, fileName, encoding)) { const original=String(line||'').trim(); if(!original)continue; const url=normaliseUrl(original); if(!url||!inviteCode(url)){invalidCount++;records.push({original_url:original,url:original,status:'invalid_link',validation_status:'invalid'});continue;} const hash=urlHash(url); if(seen.has(hash)){duplicateCount++;records.push({original_url:original,url,normalized_url:url,url_hash:hash,status:'duplicate',validation_status:'valid',duplicate_reason:'within_file'});continue;} seen.add(hash); records.push({original_url:original,url,normalized_url:url,url_hash:hash,status:'pending',validation_status:'valid'}); }
+    const hashes=records.filter(r=>r.url_hash).map(r=>r.url_hash); const normalizedUrls=records.filter(r=>r.normalized_url).map(r=>r.normalized_url); const historical=normalizedUrls.length?(await db.query('SELECT url_hash,normalized_url,url FROM link_import_items WHERE normalized_url=ANY($1::text[]) OR url=ANY($2::text[])',[normalizedUrls,normalizedUrls])).rows:[]; const historicalSet=new Set(historical.flatMap(r=>[r.url_hash,r.normalized_url,normaliseUrl(r.url)].filter(Boolean).map(v=>v.length===64&&/^[a-f0-9]+$/.test(v)?v:urlHash(v))));
+    for(const record of records) if(record.status==='pending'&&historicalSet.has(record.url_hash)){record.status='duplicate';record.duplicate_reason='historical';duplicateCount++;}
+    const validCount=records.filter(r=>r.status==='pending').length; const file=await db.query(`INSERT INTO link_import_files(file_name,file_size,total_links,valid_links,duplicate_links,invalid_links,status,import_policy,source_type) VALUES($1,$2,$3,$4,$5,$6,'ready',$7,$8) RETURNING *`,[fileName||'links.txt',binary.length,records.length,validCount,duplicateCount,invalidCount,importPolicy,sourceType]);
+    for(const record of records) await db.query(`INSERT INTO link_import_items(file_id,url,original_url,normalized_url,url_hash,duplicate_reason,validation_status,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(file_id,url) DO NOTHING`,[file.rows[0].id,record.url||record.original_url,record.original_url,record.normalized_url||null,record.url_hash||null,record.duplicate_reason||null,record.validation_status,record.status]);
+    return { file:file.rows[0], summary:{total:records.length,valid:validCount,duplicates:duplicateCount,invalid:invalidCount,newLinks:validCount,review:0}, preview:records.slice(0,100).map((r,i)=>({index:i+1,url:r.normalized_url||r.url,status:r.status,original_url:r.original_url,duplicate_reason:r.duplicate_reason||null,validation_status:r.validation_status})) };
   }
   async listFiles(accountId){const db=await DatabaseManager.getAccountDB(accountId); return (await db.query('SELECT * FROM link_import_files ORDER BY created_at DESC LIMIT 100')).rows;}
   async getFile(accountId,fileId){const db=await DatabaseManager.getAccountDB(accountId); const [f,items]=await Promise.all([db.query('SELECT * FROM link_import_files WHERE id=$1',[fileId]),db.query('SELECT * FROM link_import_items WHERE file_id=$1 ORDER BY id LIMIT 500',[fileId])]); return {file:f.rows[0]||null,items:items.rows};}
-  async start({accountId,fileId,accountIds,minDelay,maxDelay,maxAttempts=3}) {
+  async reprocessFile(accountId,fileId){const db=await DatabaseManager.getAccountDB(accountId);const rows=(await db.query('SELECT id,url,original_url FROM link_import_items WHERE file_id=$1 ORDER BY id',[fileId])).rows;const seen=new Set();let valid=0,duplicates=0,invalid=0;for(const row of rows){const original=row.original_url||row.url;const normalized=normaliseUrl(original);if(!normalized||!inviteCode(normalized)){invalid++;await db.query("UPDATE link_import_items SET normalized_url=NULL,url_hash=NULL,validation_status='invalid',status='invalid_link',duplicate_reason=NULL,updated_at=NOW() WHERE id=$1",[row.id]).catch(()=>{});continue}const hash=urlHash(normalized);if(seen.has(hash)){duplicates++;await db.query("UPDATE link_import_items SET normalized_url=$2,url_hash=$3,validation_status='valid',status='duplicate',duplicate_reason='within_file',updated_at=NOW() WHERE id=$1",[row.id,normalized,hash]);continue}seen.add(hash);valid++;await db.query("UPDATE link_import_items SET normalized_url=$2,url_hash=$3,validation_status='valid',status='pending',duplicate_reason=NULL,last_error=NULL,updated_at=NOW() WHERE id=$1",[row.id,normalized,hash]);}await db.query("UPDATE link_import_files SET total_links=$2,valid_links=$3,duplicate_links=$4,invalid_links=$5,status='ready',error_message=NULL,updated_at=NOW() WHERE id=$1",[fileId,rows.length,valid,duplicates,invalid]);return this.getFile(accountId,fileId);}
+  async start({accountId,fileId,accountIds,minDelay,maxDelay,maxAttempts=3,distributionMode='round_robin'}) {
     const selected=[...new Set(accountIds||[])].filter(id=>WhatsAppManager.isReady(id)); if(!selected.length)throw new Error('لا يوجد حساب متصل وجاهز للعمل');
-    const db=await DatabaseManager.getAccountDB(accountId); const active=await db.query("SELECT id FROM link_import_jobs WHERE status IN ('queued','running','waiting','reconnecting','paused_system','paused') LIMIT 1"); if(active.rows.length)throw new Error('توجد عملية تشغيل نشطة لهذا الحساب');
-    const rows=await db.query("SELECT id FROM link_import_items WHERE file_id=$1 AND status IN ('pending','retry','processing') ORDER BY id",[fileId]); if(!rows.rows.length)throw new Error('لا توجد روابط قابلة للمعالجة');
-    const id=randomUUID(); const min=Math.max(0,Number(minDelay)||30); const max=Math.max(min,Number(maxDelay)||min); const retries=Math.min(10,Math.max(1,Number(maxAttempts)||3));
-    await db.query(`INSERT INTO link_import_jobs(id,file_id,status,selected_account_ids,total,min_delay,max_delay,max_attempts,next_run_at,started_at,last_activity_at) VALUES($1,$2,'running',$3,$4,$5,$6,$7,NOW(),NOW(),NOW())`,[id,fileId,JSON.stringify(selected),rows.rows.length,min,max,retries]);
+    const db=await DatabaseManager.getAccountDB(accountId); const active=await db.query("SELECT id FROM link_import_jobs WHERE status IN ('queued','running','waiting','reconnecting','paused_system','paused','retrying') LIMIT 1"); if(active.rows.length)throw new Error('توجد عملية تشغيل نشطة لهذا الحساب');
+    await db.query("UPDATE link_import_items SET status='pending',started_at=NULL WHERE file_id=$1 AND status='processing' AND processed_at IS NULL",[fileId]);
+    const rows=await db.query("SELECT id FROM link_import_items WHERE file_id=$1 AND status IN ('pending','retry') AND validation_status='valid' ORDER BY id",[fileId]); if(!rows.rows.length)throw new Error('لا توجد روابط جديدة قابلة للمعالجة');
+    const id=randomUUID(); const min=Math.max(0,Number(minDelay)||30); const max=Math.max(min,Number(maxDelay)||min); const retries=Math.min(10,Math.max(1,Number(maxAttempts)||3)); const mode=['round_robin','smart','least_loaded'].includes(distributionMode)?distributionMode:'round_robin';
+    await db.query(`INSERT INTO link_import_jobs(id,file_id,status,selected_account_ids,total,min_delay,max_delay,max_attempts,distribution_mode,next_run_at,started_at,last_activity_at) VALUES($1,$2,'running',$3,$4,$5,$6,$7,$8,NOW(),NOW(),NOW())`,[id,fileId,JSON.stringify(selected),rows.rows.length,min,max,retries,mode]);
     await db.query('UPDATE link_import_items SET max_attempts=$2 WHERE file_id=$1',[fileId,retries]); for(const account of selected)await db.query('INSERT INTO link_import_account_state(job_id,account_id,status) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',[id,account,'idle']);
     await db.query("UPDATE link_import_files SET status='running',operation_id=$2,started_at=NOW() WHERE id=$1",[fileId,id]);
     await this._event(db,id,'started',null,null,'بدأت المهمة');
     const job=this._rowToJob({id,file_id:fileId,status:'running',selected_account_ids:selected,total:rows.rows.length,processed:0,successful:0,failed:0,skipped:0,min_delay:min,max_delay:max,started_at:new Date().toISOString()}); jobs.set(id,job); return job;
   }
-  _rowToJob(row){return {id:row.id,fileId:row.file_id,accountIds:Array.isArray(row.selected_account_ids)?row.selected_account_ids:JSON.parse(row.selected_account_ids||'[]'),status:row.status,total:Number(row.total||0),processed:Number(row.processed||0),successful:Number(row.successful||0),failed:Number(row.failed||0),skipped:Number(row.skipped||0),minDelay:Number(row.min_delay||30),maxDelay:Number(row.max_delay||30),maxAttempts:Number(row.max_attempts||3),startedAt:row.started_at,lastError:row.last_error||null,nextRunAt:row.next_run_at||null};}
+  _rowToJob(row){return {id:row.id,fileId:row.file_id,accountIds:Array.isArray(row.selected_account_ids)?row.selected_account_ids:JSON.parse(row.selected_account_ids||'[]'),status:row.status,total:Number(row.total||0),processed:Number(row.processed||0),successful:Number(row.successful||0),failed:Number(row.failed||0),skipped:Number(row.skipped||0),minDelay:Number(row.min_delay||30),maxDelay:Number(row.max_delay||30),maxAttempts:Number(row.max_attempts||3),distributionMode:row.distribution_mode||'round_robin',retryCount:Number(row.retry_count||0),startedAt:row.started_at,pausedAt:row.paused_at,cancelledAt:row.cancelled_at,lastError:row.last_error||null,nextRunAt:row.next_run_at||null};}
   async _broadcast(db,jobId){ try { const [j,a,i,e]=await Promise.all([db.query('SELECT j.*,f.file_name FROM link_import_jobs j JOIN link_import_files f ON f.id=j.file_id WHERE j.id=$1',[jobId]),db.query('SELECT * FROM link_import_account_state WHERE job_id=$1 ORDER BY updated_at DESC',[jobId]),db.query("SELECT * FROM link_import_items WHERE file_id=(SELECT file_id FROM link_import_jobs WHERE id=$1) AND status IN ('processing','retry','joined','already_joined','pending_approval','invalid_link','failed') ORDER BY COALESCE(processed_at,started_at,updated_at) DESC NULLS LAST LIMIT 100",[jobId]),db.query('SELECT * FROM link_import_events WHERE job_id=$1 ORDER BY created_at DESC LIMIT 100',[jobId])]); const row=j.rows[0]; if(!row)return; SocketBridge.to(`link-import:${jobId}`).emit('link_import:update',{job:this._rowToJob(row),accounts:a.rows,items:i.rows,events:e.rows,serverTime:new Date().toISOString()}); } catch(error){ console.warn(`[LinkImportWorker] broadcast failed: ${error.message}`); } }
   async _event(db,jobId,type,accountId,itemId,message,details={}){await db.query('INSERT INTO link_import_events(job_id,account_id,item_id,event_type,message,details) VALUES($1,$2,$3,$4,$5,$6)',[jobId,accountId,itemId,type,message,JSON.stringify(details)]).catch(()=>{}); await this._broadcast(db,jobId);}
   async _tickAccount(accountId){
     const db=await DatabaseManager.getAccountDB(accountId);
-    const jobsRows=await db.query("SELECT * FROM link_import_jobs WHERE status IN ('queued','running','waiting','reconnecting','paused_system') AND (next_run_at IS NULL OR next_run_at<=NOW()) ORDER BY created_at LIMIT 10");
+    const jobsRows=await db.query("SELECT * FROM link_import_jobs WHERE status IN ('queued','running','waiting','reconnecting','paused_system','retrying') AND (next_run_at IS NULL OR next_run_at<=NOW()) ORDER BY created_at LIMIT 10");
     for(const row of jobsRows.rows){
       const selected=Array.isArray(row.selected_account_ids)?row.selected_account_ids:JSON.parse(row.selected_account_ids||'[]');
       if(!selected.length){ await db.query("UPDATE link_import_jobs SET status='failed',last_error=$2,updated_at=NOW() WHERE id=$1",[row.id,'لا توجد حسابات محددة']); continue; }
@@ -89,10 +114,13 @@ class LinkImportService {
   async getJobDetails(accountId,jobId){ const db=await DatabaseManager.getAccountDB(accountId); const r=await db.query('SELECT j.*,f.file_name FROM link_import_jobs j JOIN link_import_files f ON f.id=j.file_id WHERE j.id=$1',[jobId]); if(!r.rows[0])return null; await this._broadcast(db,jobId); const [a,i,e]=await Promise.all([db.query('SELECT * FROM link_import_account_state WHERE job_id=$1 ORDER BY updated_at DESC',[jobId]),db.query("SELECT * FROM link_import_items WHERE file_id=$1 ORDER BY id LIMIT 500",[r.rows[0].file_id]),db.query('SELECT * FROM link_import_events WHERE job_id=$1 ORDER BY created_at DESC LIMIT 100',[jobId])]); return {job:this._rowToJob(r.rows[0]),accounts:a.rows,items:i.rows,events:e.rows}; }
   async listJobs(accountId){const db=await DatabaseManager.getAccountDB(accountId);const r=await db.query("SELECT * FROM link_import_jobs WHERE status NOT IN ('completed','stopped') ORDER BY created_at DESC LIMIT 20");return r.rows.map(row=>this._rowToJob(row));}
   async getJob(accountId,jobId){if(jobs.has(jobId))return jobs.get(jobId);const db=await DatabaseManager.getAccountDB(accountId);const r=await db.query('SELECT j.* FROM link_import_jobs j JOIN link_import_files f ON f.id=j.file_id WHERE j.id=$1',[jobId]);if(!r.rows[0])return null;const job=this._rowToJob(r.rows[0]);jobs.set(jobId,job);return job;}
-  async _control(accountId,jobId,status){const db=await DatabaseManager.getAccountDB(accountId);const r=await db.query('UPDATE link_import_jobs SET status=$2,next_run_at=NOW(),updated_at=NOW() WHERE id=$1 AND status NOT IN (\'completed\',\'stopped\') RETURNING *',[jobId,status]);if(!r.rows[0])throw new Error('العملية غير موجودة أو منتهية');const job=this._rowToJob(r.rows[0]);jobs.set(jobId,job);await this._event(db,jobId,status,null,null,status==='paused'?'تم إيقاف المهمة مؤقتاً':status==='stopped'?'تم إيقاف المهمة':'تم استئناف المهمة');return job;}
+  async _control(accountId,jobId,status){const db=await DatabaseManager.getAccountDB(accountId);const terminal=status==='stopped'||status==='cancelled';const r=await db.query(`UPDATE link_import_jobs SET status=$2,next_run_at=CASE WHEN $2 IN ('paused','stopped','cancelled') THEN NULL ELSE NOW() END,paused_at=CASE WHEN $2='paused' THEN NOW() ELSE paused_at END,cancelled_at=CASE WHEN $2='cancelled' THEN NOW() ELSE cancelled_at END,updated_at=NOW() WHERE id=$1 AND status NOT IN ('completed','stopped','cancelled') RETURNING *`,[jobId,status]);if(!r.rows[0])throw new Error('العملية غير موجودة أو منتهية');const job=this._rowToJob(r.rows[0]);jobs.set(jobId,job);await this._event(db,jobId,status,null,null,status==='paused'?'تم إيقاف المهمة مؤقتاً':status==='stopped'?'تم إيقاف المهمة':'تم استئناف المهمة');return job;}
   async pause(accountId,jobId){return this._control(accountId,jobId,'paused');}
   async resume(accountId,jobId){return this._control(accountId,jobId,'running');}
   async stop(accountId,jobId){const job=await this._control(accountId,jobId,'stopped');const db=await DatabaseManager.getAccountDB(accountId);await db.query("UPDATE link_import_files SET status='stopped' WHERE operation_id=$1",[jobId]);return job;}
+  async cancel(accountId,jobId){const job=await this._control(accountId,jobId,'cancelled');const db=await DatabaseManager.getAccountDB(accountId);await db.query("UPDATE link_import_files SET status='cancelled' WHERE operation_id=$1",[jobId]);return job;}
+  async retry(accountId,jobId){const db=await DatabaseManager.getAccountDB(accountId);await db.query("UPDATE link_import_items SET status='retry',processed_at=NULL,last_error=NULL WHERE file_id=(SELECT file_id FROM link_import_jobs WHERE id=$1) AND status IN ('failed','retry') AND validation_status='valid'",[jobId]);return this._control(accountId,jobId,'retrying');}
+  async restart(accountId,jobId){const db=await DatabaseManager.getAccountDB(accountId);await db.query("UPDATE link_import_items SET status='pending',processed_at=NULL,started_at=NULL WHERE file_id=(SELECT file_id FROM link_import_jobs WHERE id=$1) AND status IN ('processing','retry')",[jobId]);return this._control(accountId,jobId,'running');}
 }
 module.exports = new LinkImportService();
 module.exports.normaliseUrl=normaliseUrl; module.exports.inviteCode=inviteCode; module.exports.extractInboundValues=extractInboundValues; module.exports.extractDocxText=extractDocxText;

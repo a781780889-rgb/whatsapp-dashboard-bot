@@ -250,6 +250,7 @@ const AutoSearchController = require('./controllers/AutoSearchController');
 router.post('/links/import/files', auth, LinkImportController.import.bind(LinkImportController));
 router.get('/links/import/files', auth, LinkImportController.files.bind(LinkImportController));
 router.get('/links/import/files/:fileId', auth, LinkImportController.file.bind(LinkImportController));
+router.post('/links/import/files/:fileId/reprocess', auth, LinkImportController.reprocess.bind(LinkImportController));
 router.get('/links/import/accounts', auth, LinkImportController.accounts.bind(LinkImportController));
 router.post('/links/import/start', auth, LinkImportController.start.bind(LinkImportController));
 router.get('/links/import/jobs', auth, LinkImportController.jobs.bind(LinkImportController));
