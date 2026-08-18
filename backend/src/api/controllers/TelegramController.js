@@ -238,7 +238,7 @@ const TelegramController = {
     // ── روابط واتساب المكتشفة ────────────────────────────────────────────────
     async listLinks(req, res) {
         try {
-            const { page = 1, limit = 50, status, account_id, date_from, date_to, search } = req.query;
+            const { page = 1, limit = 50, status, copied, account_id, date_from, date_to, search } = req.query;
             const offset = (parseInt(page) - 1) * parseInt(limit);
 
             const conditions = [];
@@ -248,6 +248,8 @@ const TelegramController = {
             conditions.push(`wl.deleted = false`);
 
             if (status)     { conditions.push(`wl.status = $${pIdx++}`);             params.push(status); }
+            if (copied === 'true')  { conditions.push(`wl.copied = true`); }
+            if (copied === 'false') { conditions.push(`wl.copied = false`); }
             if (account_id) { conditions.push(`wl.source_account_id = $${pIdx++}`);  params.push(account_id); }
             if (date_from)  { conditions.push(`wl.discovered_at >= $${pIdx++}`);     params.push(date_from); }
             if (date_to)    { conditions.push(`wl.discovered_at <= $${pIdx++}`);     params.push(date_to); }
@@ -305,6 +307,27 @@ const TelegramController = {
             await query(`UPDATE whatsapp_links SET ${sets.join(',')} WHERE id=$${idx}`, params);
 
             return res.json({ success: true });
+        } catch (err) {
+            return res.status(500).json({ success: false, error: err.message });
+        }
+    },
+
+    // ── نسخ جماعي مع تسجيل النسخ ومنع ظهوره في النتائج الجديدة ─────────────
+    async bulkCopyLinks(req, res) {
+        try {
+            const { ids, copyAll = false } = req.body || {};
+            const conditions = ['deleted = false', 'copied = false'];
+            const params = [];
+            if (!copyAll) {
+                if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ success: false, error: 'يرجى تحديد روابط للنسخ' });
+                params.push(ids);
+                conditions.push(`id = ANY($${params.length}::uuid[])`);
+            }
+            const rows = await queryAll(`SELECT id, whatsapp_link FROM whatsapp_links WHERE ${conditions.join(' AND ')} ORDER BY discovered_at DESC`, params);
+            if (!rows.length) return res.json({ success: true, count: 0, links: [], message: 'لا توجد روابط جديدة غير منسوخة' });
+            const copiedIds = rows.map(row => row.id);
+            await query(`UPDATE whatsapp_links SET copied=true, copied_at=NOW(), updated_at=NOW() WHERE id = ANY($1::uuid[])`, [copiedIds]);
+            return res.json({ success: true, count: rows.length, links: rows.map(row => row.whatsapp_link) });
         } catch (err) {
             return res.status(500).json({ success: false, error: err.message });
         }
@@ -388,6 +411,7 @@ const TelegramController = {
             const joinedLinks       = await queryOne(`SELECT COUNT(*) as cnt FROM whatsapp_links WHERE joined=true AND deleted=false`);
             const deletedLinks      = await queryOne(`SELECT COUNT(*) as cnt FROM whatsapp_links WHERE deleted=true`);
             const duplicateLinks    = await queryOne(`SELECT COALESCE(SUM(duplicate_count),0) as cnt FROM whatsapp_links WHERE duplicate_count > 0`);
+            const copiedLinks       = await queryOne(`SELECT COUNT(*) as cnt FROM whatsapp_links WHERE copied=true AND deleted=false`);
 
             const perAccount = await queryAll(
                 `SELECT ta.id, ta.name, ta.phone_number, ta.bot_username, COUNT(wl.id) as links_count
@@ -411,6 +435,7 @@ const TelegramController = {
                     joinedLinks:          parseInt(joinedLinks?.cnt      || 0),
                     deletedLinks:         parseInt(deletedLinks?.cnt     || 0),
                     duplicateLinks:       parseInt(duplicateLinks?.cnt   || 0),
+                    copiedLinks:          parseInt(copiedLinks?.cnt      || 0),
                     perAccount,
                     activeWorkers:        workers.length,
                 },

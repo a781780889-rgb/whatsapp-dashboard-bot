@@ -27,13 +27,13 @@ interface WaLink {
   id: string; whatsapp_link: string; source_account_id: string;
   source_account_name: string; source_group: string; discovered_at: string;
   last_seen: string; duplicate_count: number; status: string;
-  joined: boolean; copied: boolean; deleted: boolean; notes: string;
+  joined: boolean; copied: boolean; copied_at?: string; deleted: boolean; notes: string;
 }
 
 interface Stats {
   totalAccounts: number; connectedAccounts: number; disconnectedAccounts: number;
   totalLinks: number; newLinks: number; joinedLinks: number;
-  deletedLinks: number; duplicateLinks: number;
+  deletedLinks: number; duplicateLinks: number; copiedLinks?: number;
   perAccount: { id: string; name: string; phone_number: string; links_count: number }[];
 }
 
@@ -232,6 +232,7 @@ export default function TelegramView() {
   // Links filters
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
+  const [filterCopied, setFilterCopied] = useState('false');
   const [filterAccount, setFilterAccount] = useState('');
   const [filterDateFrom, setFilterDateFrom] = useState('');
   const [filterDateTo, setFilterDateTo] = useState('');
@@ -298,6 +299,7 @@ export default function TelegramView() {
         page: String(page), limit: String(LIMIT),
         ...(search && { search }),
         ...(filterStatus && { status: filterStatus }),
+        ...(filterCopied && { copied: filterCopied }),
         ...(filterAccount && { account_id: filterAccount }),
         ...(filterDateFrom && { date_from: filterDateFrom }),
         ...(filterDateTo && { date_to: filterDateTo }),
@@ -358,9 +360,32 @@ export default function TelegramView() {
     if (data.success) { setSelected(new Set()); fetchLinks(); fetchStats(); }
   }
 
-  function copyLink(link: string) {
-    navigator.clipboard.writeText(link);
-    addToast({ title: '📋 تم النسخ', type: 'success' });
+  async function copySelectedLinks(ids: string[]) {
+    try {
+      const res = await authFetch(`${API}/telegram/links/bulk-copy`, { method: 'POST', body: JSON.stringify({ ids }) });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'تعذر نسخ الروابط');
+      if (data.links?.length) await navigator.clipboard.writeText(data.links.join('\n'));
+      setLinks(prev => prev.map(l => ids.includes(l.id) ? { ...l, copied: true, copied_at: new Date().toISOString() } : l));
+      setSelected(prev => { const next = new Set(prev); ids.forEach(id => next.delete(id)); return next; });
+      fetchStats();
+      addToast({ title: '📋 تم النسخ', description: `تم نسخ ${data.count || 0} رابط وتسجيلها كمنسوخة`, type: 'success' });
+    } catch (error: any) { addToast({ title: 'خطأ في النسخ', description: error.message, type: 'error' }); }
+  }
+
+  async function copyAllNewLinks() {
+    try {
+      const res = await authFetch(`${API}/telegram/links/bulk-copy`, { method: 'POST', body: JSON.stringify({ copyAll: true }) });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'تعذر نسخ الروابط الجديدة');
+      if (data.links?.length) await navigator.clipboard.writeText(data.links.join('\n'));
+      fetchLinks(); fetchStats();
+      addToast({ title: '📋 تم نسخ الروابط كاملة', description: `تم نسخ ${data.count || 0} رابط جديد، ولن يظهر مرة أخرى ضمن الجديدة`, type: 'success' });
+    } catch (error: any) { addToast({ title: 'خطأ في النسخ الجماعي', description: error.message, type: 'error' }); }
+  }
+
+  async function copyLink(link: string, id: string) {
+    await copySelectedLinks([id]);
   }
 
   async function exportCSV() {
@@ -389,6 +414,7 @@ export default function TelegramView() {
     processed: 'bg-yellow-500/15 text-yellow-400',
     joined:    'bg-green-500/15 text-green-400',
     deleted:   'bg-red-500/15 text-red-400',
+    copied:    'bg-blue-500/15 text-blue-400',
   };
 
   const inputCls = "px-3 py-2 rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-default)] text-sm focus:outline-none focus:border-[var(--brand-primary)] transition-colors placeholder:text-[var(--text-muted)]";
@@ -426,6 +452,7 @@ export default function TelegramView() {
           <StatCard label="تم الانضمام" value={stats.joinedLinks} color="#00A884" icon={CheckCircle2} />
           <StatCard label="محذوفة" value={stats.deletedLinks} color="#6b7280" icon={Trash2} />
           <StatCard label="مكررة متجاهلة" value={stats.duplicateLinks} color="#3b82f6" icon={Database} />
+          <StatCard label="تم نسخها مسبقاً" value={stats.copiedLinks || 0} color="#2563eb" icon={Copy} />
         </div>
       )}
 
@@ -588,6 +615,13 @@ export default function TelegramView() {
               <option value="joined">🟢 تم الانضمام</option>
             </select>
 
+            <select className={inputCls} value={filterCopied}
+              onChange={e => { setFilterCopied(e.target.value); setPage(1); }}>
+              <option value="false">روابط جديدة غير منسوخة</option>
+              <option value="true">روابط تم نسخها مسبقاً</option>
+              <option value="">كل حالات النسخ</option>
+            </select>
+
             <select className={inputCls} value={filterAccount}
               onChange={e => { setFilterAccount(e.target.value); setPage(1); }}>
               <option value="">كل الحسابات</option>
@@ -600,12 +634,14 @@ export default function TelegramView() {
               onChange={e => { setFilterDateTo(e.target.value); setPage(1); }} title="إلى تاريخ" />
 
             <div className="flex gap-1 mr-auto">
+              <button onClick={copyAllNewLinks}
+                className="px-3 py-2 rounded-xl text-xs bg-blue-500/15 text-blue-400 hover:bg-blue-500/25 transition-colors font-bold flex items-center gap-1.5">
+                <Copy className="w-3.5 h-3.5" /> نسخ الروابط الجديدة كاملة
+              </button>
               {selected.size > 0 && (
                 <>
                   <button onClick={() => {
-                    const text = links.filter(l => selected.has(l.id)).map(l => l.whatsapp_link).join('\n');
-                    navigator.clipboard.writeText(text);
-                    addToast({ title: '📋 تم النسخ', type: 'success' });
+                    copySelectedLinks([...selected]);
                   }} className="px-3 py-2 rounded-xl text-xs bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 transition-colors font-semibold flex items-center gap-1.5">
                     <Copy className="w-3.5 h-3.5" /> نسخ ({selected.size})
                   </button>
@@ -694,12 +730,12 @@ export default function TelegramView() {
                         </td>
                         <td className="px-3 py-2.5">
                           <span className={cn('px-2 py-0.5 rounded-full text-xs font-semibold', statusColor[link.status] || 'bg-[var(--bg-elevated)] text-[var(--text-muted)]')}>
-                            {link.status === 'new' ? 'جديد' : link.status === 'processed' ? 'معالج' : link.status === 'joined' ? 'منضم' : link.status}
+                            {link.copied ? 'تم النسخ مسبقاً' : link.status === 'new' ? 'جديد' : link.status === 'processed' ? 'معالج' : link.status === 'joined' ? 'منضم' : link.status}
                           </span>
                         </td>
                         <td className="px-3 py-2.5">
                           <div className="flex items-center gap-0.5">
-                            <button onClick={() => copyLink(link.whatsapp_link)} title="نسخ"
+                            <button onClick={() => copyLink(link.whatsapp_link, link.id)} title={link.copied ? 'تم النسخ مسبقاً' : 'نسخ الرابط'}
                               className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-blue-400 hover:bg-blue-500/10 transition-colors">
                               <Copy className="w-3.5 h-3.5" />
                             </button>

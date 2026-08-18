@@ -86,6 +86,9 @@ const TelegramMigrations = {
                 )
             `);
 
+            await query(`ALTER TABLE whatsapp_links ADD COLUMN IF NOT EXISTS copied_at TIMESTAMPTZ`).catch(() => {});
+            await query(`CREATE INDEX IF NOT EXISTS idx_whatsapp_links_copied ON whatsapp_links(copied, discovered_at DESC) WHERE deleted=false`).catch(() => {});
+
             // ── مركز كلمات تيليجرام ─────────────────────────────────────
             await query(`
                 CREATE TABLE IF NOT EXISTS telegram_keywords (

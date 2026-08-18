@@ -588,6 +588,7 @@ router.post  ("/telegram-keywords/results/:id/reply",  auth, TelegramKeywordCont
 router.get   ("/telegram/links",                       auth, TelegramController.listLinks.bind(TelegramController));
 router.get   ("/telegram/links/export",                auth, TelegramController.exportLinks.bind(TelegramController));
 router.post  ("/telegram/links/bulk-delete",           auth, TelegramController.bulkDeleteLinks.bind(TelegramController));
+router.post  ("/telegram/links/bulk-copy",             auth, TelegramController.bulkCopyLinks.bind(TelegramController));
 router.patch ("/telegram/links/:id",                   auth, TelegramController.updateLinkStatus.bind(TelegramController));
 router.delete("/telegram/links/:id",                   auth, TelegramController.deleteLink.bind(TelegramController));
 
