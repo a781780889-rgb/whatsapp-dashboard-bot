@@ -25,6 +25,17 @@ function matches(text, keyword) {
 }
 function safeAccount(account) { if (!account) return null; const { session_string, api_hash, bot_token, ...safe } = account; return safe; }
 function messageHash(message) { return crypto.createHash('sha256').update(`${message.telegram_account_id || ''}:${message.chat_id || ''}:${message.message_id || ''}:${message.text || ''}`).digest('hex'); }
+let ignoredTableReady;
+async function ensureIgnoredMessagesTable() {
+  if (!ignoredTableReady) {
+    ignoredTableReady = (async () => {
+      await query(`CREATE TABLE IF NOT EXISTS telegram_ignored_messages (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), telegram_account_id UUID NOT NULL, chat_id TEXT NOT NULL, message_id TEXT NOT NULL, sender_id TEXT, message_hash TEXT, ignored_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), ignored_by UUID, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE (telegram_account_id, chat_id, message_id))`);
+      await query(`CREATE INDEX IF NOT EXISTS idx_tg_ignored_lookup ON telegram_ignored_messages(telegram_account_id, chat_id, message_id)`).catch(() => {});
+      await query(`CREATE INDEX IF NOT EXISTS idx_tg_ignored_hash ON telegram_ignored_messages(message_hash) WHERE message_hash IS NOT NULL`).catch(() => {});
+    })().catch(error => { ignoredTableReady = undefined; throw error; });
+  }
+  return ignoredTableReady;
+}
 
 const Service = {
   normalizeText, matches,
@@ -33,6 +44,7 @@ const Service = {
     return rows.map(a => ({ ...a, keyword_status: a.status === 'connected' ? 'active' : 'offline' }));
   },
   async dashboard(userId, filters = {}) {
+    await ensureIgnoredMessagesTable();
     const [accounts, keywords, stats] = await Promise.all([
       this.accounts(userId),
       queryAll(`SELECT * FROM telegram_keywords WHERE user_id=$1 ORDER BY created_at DESC`, [userId]),
@@ -62,6 +74,7 @@ const Service = {
   },
   async deleteKeyword(userId, id) { const r = await query(`DELETE FROM telegram_keywords WHERE id=$1 AND user_id=$2`, [id, userId]); if (!r.rowCount) throw new Error('الكلمة غير موجودة'); return true; },
   async isIgnored(message) {
+    await ensureIgnoredMessagesTable();
     const accountId = String(message.telegram_account_id || message.account_id || '');
     const chatId = String(message.chat_id || message.chatId || '');
     const messageId = String(message.message_id || message.id || '');
@@ -73,6 +86,7 @@ const Service = {
     return Boolean(row);
   },
   async ignoreMessage(userId, resultId) {
+    await ensureIgnoredMessagesTable();
     const result = await queryOne(`SELECT r.telegram_account_id,r.chat_id,r.message_id,r.sender_id,r.message_text FROM telegram_keyword_results r JOIN telegram_accounts a ON a.id=r.telegram_account_id WHERE r.id=$1 AND r.user_id=$2`, [resultId, userId]);
     if (!result) throw Object.assign(new Error('نتيجة الرسالة غير موجودة'), { code: 'RESULT_NOT_FOUND' });
     const hash = messageHash({ telegram_account_id: result.telegram_account_id, chat_id: result.chat_id, message_id: result.message_id, text: result.message_text });
@@ -82,6 +96,7 @@ const Service = {
     return { ignored: true, telegram_account_id: result.telegram_account_id, chat_id: result.chat_id, message_id: result.message_id };
   },
   async ingest(accountId, message) {
+    await ensureIgnoredMessagesTable();
     const account = await queryOne(`SELECT * FROM telegram_accounts WHERE id=$1`, [accountId]); if (!account || account.status !== 'connected') return { matched: 0 };
     const normalizedMessage = { ...message, telegram_account_id: accountId, chat_id: String(message.chat_id || message.chatId || ''), message_id: String(message.message_id || message.id || '') };
     if (await this.isIgnored(normalizedMessage)) return { matched: 0, ignored: true };

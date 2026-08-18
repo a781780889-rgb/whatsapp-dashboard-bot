@@ -47,6 +47,7 @@ const TelegramMigrations = {
                 `ALTER TABLE telegram_keyword_results ADD COLUMN IF NOT EXISTS sender_first_name TEXT`,
                 `ALTER TABLE telegram_keyword_results ADD COLUMN IF NOT EXISTS sender_last_name TEXT`,
                 `ALTER TABLE telegram_keyword_results ADD COLUMN IF NOT EXISTS sender_peer_type VARCHAR(30)`,
+                `ALTER TABLE telegram_keyword_results ADD COLUMN IF NOT EXISTS ignored BOOLEAN DEFAULT FALSE`,
                 `ALTER TABLE telegram_accounts ALTER COLUMN phone_number DROP NOT NULL`,
             ];
             for (const cmd of alterCmds) {
