@@ -24,6 +24,13 @@ function matches(text, keyword) {
   return a.includes(b);
 }
 function safeAccount(account) { if (!account) return null; const { session_string, api_hash, bot_token, ...safe } = account; return safe; }
+function messageIdentity(message, accountId = message.telegram_account_id || message.account_id || '') {
+  const chatId = String(message.chat_id || message.chatId || '');
+  const explicitId = message.message_id || message.messageId || message.telegram_message_id || message.id;
+  if (explicitId !== undefined && explicitId !== null && String(explicitId).trim()) return { accountId: String(accountId), chatId, messageId: String(explicitId) };
+  const fallback = crypto.createHash('sha256').update(`${accountId}:${chatId}:${message.sender_id || ''}:${message.date || message.timestamp || ''}:${message.text || message.message || ''}`).digest('hex').slice(0, 48);
+  return { accountId: String(accountId), chatId, messageId: `derived:${fallback}` };
+}
 function messageHash(message) { return crypto.createHash('sha256').update(`${message.telegram_account_id || ''}:${message.chat_id || ''}:${message.message_id || ''}:${message.text || ''}`).digest('hex'); }
 let ignoredTableReady;
 async function ensureIgnoredMessagesTable() {
@@ -48,9 +55,9 @@ const Service = {
     const [accounts, keywords, stats] = await Promise.all([
       this.accounts(userId),
       queryAll(`SELECT * FROM telegram_keywords WHERE user_id=$1 ORDER BY created_at DESC`, [userId]),
-      queryOne(`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE detected_at >= NOW()-INTERVAL '24 hours')::int AS today, COUNT(*) FILTER (WHERE ignored=false AND NOT EXISTS (SELECT 1 FROM telegram_ignored_messages im WHERE im.telegram_account_id=r0.telegram_account_id AND im.chat_id=r0.chat_id AND im.message_id=r0.message_id))::int AS active FROM telegram_keyword_results r0 WHERE r0.user_id=$1`, [userId]),
+      queryOne(`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE detected_at >= NOW()-INTERVAL '24 hours')::int AS today, COUNT(*) FILTER (WHERE COALESCE(r0.ignored,FALSE)=FALSE AND NOT EXISTS (SELECT 1 FROM telegram_ignored_messages im WHERE im.telegram_account_id=r0.telegram_account_id AND im.chat_id=r0.chat_id AND im.message_id=r0.message_id))::int AS active FROM telegram_keyword_results r0 WHERE r0.user_id=$1`, [userId]),
     ]);
-    const conditions = ['r.user_id=$1', `NOT EXISTS (SELECT 1 FROM telegram_ignored_messages im WHERE im.telegram_account_id=r.telegram_account_id AND im.chat_id=r.chat_id AND im.message_id=r.message_id)`]; const params = [userId]; let n = 2;
+    const conditions = ['r.user_id=$1', 'COALESCE(r.ignored,FALSE)=FALSE', `NOT EXISTS (SELECT 1 FROM telegram_ignored_messages im WHERE im.telegram_account_id=r.telegram_account_id AND im.chat_id=r.chat_id AND im.message_id=r.message_id)`]; const params = [userId]; let n = 2;
     if (filters.keyword_id) { conditions.push(`r.keyword_id=$${n++}`); params.push(filters.keyword_id); }
     if (filters.account_id) { conditions.push(`r.telegram_account_id=$${n++}`); params.push(filters.account_id); }
     if (filters.search) { conditions.push(`(r.message_text ILIKE $${n} OR r.sender_name ILIKE $${n} OR r.sender_username ILIKE $${n} OR r.chat_title ILIKE $${n})`); params.push(`%${filters.search}%`); n++; }
@@ -75,15 +82,17 @@ const Service = {
   async deleteKeyword(userId, id) { const r = await query(`DELETE FROM telegram_keywords WHERE id=$1 AND user_id=$2`, [id, userId]); if (!r.rowCount) throw new Error('الكلمة غير موجودة'); return true; },
   async isIgnored(message) {
     await ensureIgnoredMessagesTable();
-    const accountId = String(message.telegram_account_id || message.account_id || '');
-    const chatId = String(message.chat_id || message.chatId || '');
-    const messageId = String(message.message_id || message.id || '');
+    const identity = messageIdentity(message);
+    const accountId = identity.accountId;
+    const chatId = identity.chatId;
+    const messageId = identity.messageId;
     if (!accountId || !chatId || !messageId) return false;
     const cacheKey = `tg:ignored:${accountId}:${chatId}:${messageId}`;
     try { if (await RedisManager.getCache().get(cacheKey)) return true; } catch {}
     const row = await queryOne(`SELECT 1 FROM telegram_ignored_messages WHERE telegram_account_id=$1 AND chat_id=$2 AND message_id=$3 LIMIT 1`, [accountId, chatId, messageId]);
-    if (row) { try { await RedisManager.getCache().set(cacheKey, '1', 'EX', 86400); } catch {} }
-    return Boolean(row);
+    const flagged = row || await queryOne(`SELECT 1 FROM telegram_keyword_results WHERE telegram_account_id=$1 AND chat_id=$2 AND message_id=$3 AND COALESCE(ignored,FALSE)=TRUE LIMIT 1`, [accountId, chatId, messageId]);
+    if (flagged) { try { await RedisManager.getCache().set(cacheKey, '1', 'EX', 86400); } catch {} }
+    return Boolean(flagged);
   },
   async ignoreMessage(userId, resultId) {
     await ensureIgnoredMessagesTable();
@@ -98,7 +107,8 @@ const Service = {
   async ingest(accountId, message) {
     await ensureIgnoredMessagesTable();
     const account = await queryOne(`SELECT * FROM telegram_accounts WHERE id=$1`, [accountId]); if (!account || account.status !== 'connected') return { matched: 0 };
-    const normalizedMessage = { ...message, telegram_account_id: accountId, chat_id: String(message.chat_id || message.chatId || ''), message_id: String(message.message_id || message.id || '') };
+    const identity = messageIdentity(message, accountId);
+    const normalizedMessage = { ...message, telegram_account_id: identity.accountId, chat_id: identity.chatId, message_id: identity.messageId };
     if (await this.isIgnored(normalizedMessage)) return { matched: 0, ignored: true };
     const text = String(message.text || message.message || '').trim(); if (!text) return { matched: 0 };
     const keywords = await queryAll(`SELECT * FROM telegram_keywords WHERE user_id=$1 AND is_active=true AND (account_ids='[]'::jsonb OR account_ids ? $2)`, [account.user_id, String(accountId)]);
@@ -107,7 +117,7 @@ const Service = {
       const chatType = String(message.chat_type || (message.is_channel ? 'channel' : 'group'));
       if (chatType === 'channel' && !keyword.search_channels) continue; if (chatType !== 'channel' && !keyword.search_groups) continue;
       if (!matches(text, keyword)) continue;
-      const result = await queryOne(`INSERT INTO telegram_keyword_results(user_id,keyword_id,telegram_account_id,chat_id,message_id,sender_id,sender_access_hash,sender_first_name,sender_last_name,sender_peer_type,sender_username,sender_name,sender_phone,message_text,chat_title,chat_type,message_timestamp) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT(telegram_account_id,chat_id,message_id,keyword_id) DO NOTHING RETURNING *`, [account.user_id, keyword.id, accountId, String(message.chat_id || message.chatId || ''), String(message.message_id || message.id || uuidv4()), message.sender_id || null, message.sender_access_hash || null, message.sender_first_name || null, message.sender_last_name || null, message.sender_peer_type || 'user', message.sender_username || null, message.sender_name || null, message.sender_phone || null, text, message.chat_title || message.chat_name || '', chatType, message.date ? new Date(message.date) : new Date()]);
+      const result = await queryOne(`INSERT INTO telegram_keyword_results(user_id,keyword_id,telegram_account_id,chat_id,message_id,sender_id,sender_access_hash,sender_first_name,sender_last_name,sender_peer_type,sender_username,sender_name,sender_phone,message_text,chat_title,chat_type,message_timestamp) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT(telegram_account_id,chat_id,message_id,keyword_id) DO NOTHING RETURNING *`, [account.user_id, keyword.id, identity.accountId, identity.chatId, identity.messageId, message.sender_id || null, message.sender_access_hash || null, message.sender_first_name || null, message.sender_last_name || null, message.sender_peer_type || 'user', message.sender_username || null, message.sender_name || null, message.sender_phone || null, text, message.chat_title || message.chat_name || '', chatType, message.date ? new Date(message.date) : new Date()]);
       if (!result) continue; matched++;
       await query(`INSERT INTO telegram_keyword_events(user_id,telegram_account_id,event_type,result_id,payload) VALUES($1,$2,'matched',$3,$4)`, [account.user_id, accountId, result.id, JSON.stringify({ keyword: keyword.keyword, chat_id: result.chat_id })]).catch(() => {});
       SocketBridge.to(`user:${account.user_id}`).emit('telegram:keyword:matched', { result, keyword: { id: keyword.id, keyword: keyword.keyword }, account: safeAccount(account) });
