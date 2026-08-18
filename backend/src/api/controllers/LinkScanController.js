@@ -36,6 +36,17 @@ const { parseMany, parseSupportedUrl, classifyJoinError } = require('../services
 const activeJoinLinks = new Set();
 
 class LinkScanController {
+  async _redisHealth() {
+    const started = Date.now();
+    try {
+      const RedisManager = require('../../lib/RedisManager');
+      const redis = RedisManager.getCache();
+      const pong = await Promise.race([redis.ping(), new Promise((_, reject) => setTimeout(() => reject(new Error('Redis timeout')), 2000))]);
+      return { status: pong === 'PONG' ? 'healthy' : 'degraded', latencyMs: Date.now() - started };
+    } catch (error) {
+      return { status: 'error', latencyMs: Date.now() - started, message: error.message };
+    }
+  }
 
   // ══════════════════════════════════════════════════════════════════════════
   //  جداول قاعدة البيانات
@@ -268,6 +279,7 @@ class LinkScanController {
 
       // إحصائيات مهمة الفحص
       const scanJob = LinkScanEngine.getJob(accountId);
+      const redisHealth = await this._redisHealth();
 
       res.json({
         success: true,
@@ -296,7 +308,7 @@ class LinkScanController {
           failedToday:   failedToday?.cnt || 0,
           newToday:      newToday?.cnt || 0,
           newHour:       newHour?.cnt || 0,
-          health:        { database: 'healthy', monitoringEngine: scanJob && ['running','processing','queued','retrying','waiting'].includes(scanJob.status) ? 'running' : 'idle' },
+          health:        { database: 'healthy', redis: redisHealth, monitoringEngine: scanJob && ['running','processing','queued','retrying','waiting'].includes(scanJob.status) ? 'running' : 'idle' },
           scan:           scanJob,
         },
       });

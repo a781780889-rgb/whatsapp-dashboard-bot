@@ -20,7 +20,7 @@ interface MonitorStats {
   lastDiscovered: string | null;
   newToday?: number;
   newHour?: number;
-  health?: { database?: string; monitoringEngine?: string };
+  health?: { database?: string; monitoringEngine?: string; redis?: { status?: string; latencyMs?: number; message?: string } };
 }
 
 interface MonitorJob {
@@ -77,6 +77,7 @@ export default function LinkMonitoringCenter({ stats, job, accounts, realtime, o
   const statusLabel = job ? (statusText[job.status || ''] || job.status || 'غير معروف') : 'خامل';
   const health = [
     { label: 'قاعدة البيانات', value: stats?.health?.database === 'healthy' ? 'سليمة' : 'غير متاحة', tone: stats?.health?.database === 'healthy' ? 'good' : 'warn', Icon: Database },
+    { label: 'Redis', value: stats?.health?.redis?.status === 'healthy' ? `سليم · ${stats.health.redis.latencyMs ?? '—'}ms` : stats?.health?.redis?.status === 'degraded' ? 'استجابة متدهورة' : stats?.health?.redis?.status === 'error' ? 'خطأ في الاتصال' : 'غير متاح', tone: stats?.health?.redis?.status === 'healthy' ? 'good' : 'warn', Icon: Server },
     { label: 'WebSocket', value: realtime === 'connected' ? 'متصل' : realtime === 'reconnecting' ? 'إعادة اتصال' : 'غير متصل', tone: realtime === 'connected' ? 'good' : 'warn', Icon: realtime === 'connected' ? Wifi : WifiOff },
     { label: 'محرك المراقبة', value: jobBusy ? 'يعمل' : jobPaused ? 'متوقف مؤقتاً' : stats?.health?.monitoringEngine === 'idle' ? 'خامل' : 'غير متاح', tone: jobBusy ? 'good' : jobPaused ? 'warn' : 'neutral', Icon: Activity },
     { label: 'المصادر المتصلة', value: `${connectedSources}/${activeSources}`, tone: connectedSources > 0 ? 'good' : 'warn', Icon: Radio },
