@@ -186,6 +186,21 @@ const SystemDB = {
         `);
         await p.query(`CREATE INDEX IF NOT EXISTS idx_kw_alerts_user ON kw_alerts(user_id, message_time DESC)`).catch(() => {});
         await p.query(`CREATE INDEX IF NOT EXISTS idx_kw_alerts_status ON kw_alerts(user_id, status)`).catch(() => {});
+        await p.query(`
+            CREATE TABLE IF NOT EXISTS kw_ignored_messages (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id UUID NOT NULL,
+                account_id UUID NOT NULL,
+                message_id TEXT NOT NULL,
+                remote_jid TEXT,
+                message_hash TEXT,
+                ignored_by UUID,
+                ignored_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE(user_id, account_id, message_id)
+            )
+        `);
+        await p.query(`CREATE INDEX IF NOT EXISTS idx_kw_ignored_lookup ON kw_ignored_messages(user_id, account_id, message_id)`).catch(() => {});
 
         await p.query(`
             CREATE TABLE IF NOT EXISTS kw_settings (

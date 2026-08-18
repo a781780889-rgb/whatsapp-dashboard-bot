@@ -536,6 +536,11 @@ export default function KeywordMonitoringView({ userId }: { userId: string }) {
       if (settings.sound_enabled) { try { new Audio('/sounds/alert.mp3').play().catch(() => {}); } catch {} }
       addToast({ title: `تنبيه: ${alert.matched_keyword} من ${alert.sender_name}`, type: 'info' });
     };
+    const onDeleted = (payload: any) => {
+      if (!payload || payload.userId !== userId) return;
+      setAlerts(prev => prev.filter(a => a.id !== payload.alertId && !(payload.accountId && payload.messageId && a.account_id === payload.accountId && a.message_id === payload.messageId)));
+      setDetailAlert(prev => prev && (prev.id === payload.alertId || (payload.accountId && payload.messageId && prev.account_id === payload.accountId && prev.message_id === payload.messageId)) ? null : prev);
+    };
     const onNotification = (payload: any) => {
       if (!payload || payload.userId !== userId) return;
       if (payload.notification) setNotifications(prev => [payload.notification, ...prev.filter(n => n.id !== payload.notification.id)]);
@@ -543,8 +548,9 @@ export default function KeywordMonitoringView({ userId }: { userId: string }) {
     };
     socket.on('connect', () => socket.emit('join_user', { userId, token: localStorage.getItem(TOKEN_KEY) || '' }));
     socket.on('keyword_alert', onAlert);
+    socket.on('keyword_alert_deleted', onDeleted);
     socket.on('keyword_notification', onNotification);
-    return () => { socket.off('keyword_alert', onAlert); socket.off('keyword_notification', onNotification); socket.disconnect(); };
+    return () => { socket.off('keyword_alert', onAlert); socket.off('keyword_alert_deleted', onDeleted); socket.off('keyword_notification', onNotification); socket.disconnect(); };
   }, [userId, settings.sound_enabled, addToast]);
 
   // ── Keyword actions ──────────────────────────────────────────────────────

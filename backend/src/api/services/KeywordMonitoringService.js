@@ -9,6 +9,16 @@ const MAX_ATTEMPTS = 5;
 let workerTimer = null;
 let heartbeatTimer = null;
 let workerRunning = false;
+let ignoredTableReady;
+async function ensureIgnoredTable() {
+    if (!ignoredTableReady) {
+        ignoredTableReady = (async () => {
+            await SystemDB.run(`CREATE TABLE IF NOT EXISTS kw_ignored_messages (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL, account_id UUID NOT NULL, message_id TEXT NOT NULL, remote_jid TEXT, message_hash TEXT, ignored_by UUID, ignored_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(user_id, account_id, message_id))`);
+            await SystemDB.run(`CREATE INDEX IF NOT EXISTS idx_kw_ignored_lookup ON kw_ignored_messages(user_id, account_id, message_id)`).catch(() => {});
+        })().catch(error => { ignoredTableReady = undefined; throw error; });
+    }
+    return ignoredTableReady;
+}
 
 function normalizeText(value, caseSensitive = false) {
     let text = String(value || '').normalize('NFKC').replace(/[\u064B-\u065F\u0670]/g, '');
@@ -99,6 +109,7 @@ const KeywordMonitoringService = {
     },
 
     async getAlerts(userId, options = {}) {
+        await ensureIgnoredTable();
         const page = Math.max(1, Number(options.page) || 1), limit = Math.min(100, Math.max(1, Number(options.limit) || 30));
         const where = ['a.user_id=$1']; const values = [userId]; let i = 2;
         const add = (sql, value) => { where.push(sql.replace('?', `$${i++}`)); values.push(value); };
@@ -111,11 +122,11 @@ const KeywordMonitoringService = {
         if (options.date_from) add(`a.message_time>=?`, new Date(options.date_from));
         if (options.date_to) add(`a.message_time<=?`, new Date(options.date_to));
         const clause = where.join(' AND ');
-        const total = await SystemDB.get(`SELECT COUNT(*) FROM kw_alerts a WHERE ${clause}`, values);
+        const total = await SystemDB.get(`SELECT COUNT(*) FROM kw_alerts a WHERE ${clause} AND NOT EXISTS (SELECT 1 FROM kw_ignored_messages im WHERE im.user_id=a.user_id AND im.account_id=a.account_id AND im.message_id=a.message_id)`, values);
         const count = Number(total?.count || 0); values.push(limit, (page - 1) * limit);
         const alerts = await SystemDB.all(`SELECT a.*,k.color keyword_color,k.priority keyword_priority,acc.name account_name,acc.phone_number account_phone
             FROM kw_alerts a LEFT JOIN kw_keywords k ON k.id=a.keyword_id LEFT JOIN accounts acc ON acc.id=a.account_id
-            WHERE ${clause} ORDER BY COALESCE(a.is_pinned,FALSE) DESC,a.message_time DESC LIMIT $${i++} OFFSET $${i}`, values);
+            WHERE ${clause} AND NOT EXISTS (SELECT 1 FROM kw_ignored_messages im WHERE im.user_id=a.user_id AND im.account_id=a.account_id AND im.message_id=a.message_id) ORDER BY COALESCE(a.is_pinned,FALSE) DESC,a.message_time DESC LIMIT $${i++} OFFSET $${i}`, values);
         return { alerts, total: count, page, pages: Math.ceil(count / limit) };
     },
 
@@ -124,7 +135,18 @@ const KeywordMonitoringService = {
         if (!row) throw new Error('التنبيه غير موجود');
         return row;
     },
-    async deleteAlert(userId, id) { const row = await SystemDB.get(`DELETE FROM kw_alerts WHERE id=$1 AND user_id=$2 RETURNING id`, [id,userId]); if (!row) throw new Error('التنبيه غير موجود'); return { success:true }; },
+    async deleteAlert(userId, id) {
+        await ensureIgnoredTable();
+        const alert = await SystemDB.get(`SELECT id,account_id,message_id,group_jid,message_text FROM kw_alerts WHERE id=$1 AND user_id=$2`, [id, userId]);
+        if (!alert) throw new Error('التنبيه غير موجود');
+        if (alert.account_id && alert.message_id) {
+            const hash = crypto.createHash('sha256').update(`${alert.account_id}:${alert.message_id}:${alert.message_text || ''}`).digest('hex');
+            await SystemDB.run(`INSERT INTO kw_ignored_messages(user_id,account_id,message_id,remote_jid,message_hash,ignored_by) VALUES($1,$2,$3,$4,$5,$1) ON CONFLICT(user_id,account_id,message_id) DO NOTHING`, [userId, alert.account_id, alert.message_id, alert.group_jid || null, hash]);
+        }
+        await SystemDB.run(`DELETE FROM kw_alerts WHERE id=$1 AND user_id=$2`, [id, userId]);
+        await broadcast('keyword_alert_deleted', { userId, alertId: id, accountId: alert.account_id || null, messageId: alert.message_id || null });
+        return { success:true, ignored: Boolean(alert.account_id && alert.message_id) };
+    },
     async addAlertNote(userId,id,note) { return this.updateAlertStatus(userId,id,'reviewed',note); },
     async setAlertFlag(userId,id,field,value) { if (!['is_pinned','is_archived'].includes(field)) throw new Error('حقل غير مسموح'); const row = await SystemDB.get(`UPDATE kw_alerts SET ${field}=$1,updated_at=NOW() WHERE id=$2 AND user_id=$3 RETURNING *`,[!!value,id,userId]); if (!row) throw new Error('التنبيه غير موجود'); return row; },
 
@@ -152,6 +174,7 @@ const KeywordMonitoringService = {
     async importKeywords(userId,keywords) { let added=0; for(const k of keywords||[]) { try { await this.addKeyword(userId,k); added++; } catch(_) {} } return {added}; },
 
     async enqueueMessage(accountId, msg) {
+        await ensureIgnoredTable();
         if (!msg?.message || msg.key?.fromMe) return null;
         const acct = await SystemDB.get(`SELECT user_id FROM accounts WHERE id=$1`, [accountId]);
         if (!acct?.user_id) return null;
@@ -160,6 +183,8 @@ const KeywordMonitoringService = {
         const scope = Array.isArray(settings.account_ids) ? settings.account_ids.map(String) : [];
         if (settings.monitoring_enabled === false || (scope.length > 0 && !scope.includes(String(accountId))) || (isGroup && settings.scan_groups===false) || (!isGroup && settings.scan_private===false)) return null;
         const id = getMessageId(msg); const text = extractMessageText(msg); if (!text) return null;
+        const ignored = await SystemDB.get(`SELECT 1 FROM kw_ignored_messages WHERE user_id=$1 AND account_id=$2 AND message_id=$3 LIMIT 1`, [acct.user_id, accountId, id]);
+        if (ignored) return null;
         await SystemDB.run(`INSERT INTO kw_event_queue(user_id,account_id,message_id,payload) VALUES($1,$2,$3,$4) ON CONFLICT(account_id,message_id,event_type) DO NOTHING`, [acct.user_id,accountId,id,JSON.stringify(msg)]);
         await SystemDB.run(`INSERT INTO kw_service_health(account_id,user_id,status,last_event_at,updated_at) VALUES($1,$2,'connected',NOW(),NOW()) ON CONFLICT(account_id) DO UPDATE SET user_id=$2,last_event_at=NOW(),updated_at=NOW()`,[accountId,acct.user_id]);
         return id;
@@ -168,7 +193,10 @@ const KeywordMonitoringService = {
     async processIncomingMessage(accountId, userId, msg) { return this.enqueueMessage(accountId,msg); },
 
     async _processQueueJob(job) {
+        await ensureIgnoredTable();
         const msg=job.payload||{}; const text=extractMessageText(msg); const remote=msg.key?.remoteJid||''; const group=remote.endsWith('@g.us');
+        const ignored = await SystemDB.get(`SELECT 1 FROM kw_ignored_messages WHERE user_id=$1 AND account_id=$2 AND message_id=$3 LIMIT 1`, [job.user_id, job.account_id, job.message_id]);
+        if (ignored) return;
         await SystemDB.run(`INSERT INTO kw_messages(user_id,account_id,message_id,remote_jid,participant_jid,sender_phone,sender_name,chat_name,message_text,is_group,message_time,raw_payload) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(account_id,message_id) DO NOTHING`,[job.user_id,job.account_id,job.message_id,remote,msg.key?.participant||null,jidPhone(msg.key?.participant||remote),msg.pushName||jidPhone(msg.key?.participant||remote),group?remote:msg.pushName||jidPhone(remote),text,group,new Date(Number(msg.messageTimestamp||Date.now()/1000)*1000),JSON.stringify(msg)]);
         const keywords=await SystemDB.all(`SELECT * FROM kw_keywords WHERE user_id=$1 AND is_active=TRUE`,[job.user_id]);
         for(const kw of keywords) if(matchesKeyword(kw,text)) {
