@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/table';
 import { cn } from '@/utils/cn';
 import { API, authFetch } from '@/utils/api';
+import LinkMonitoringCenter from '@/components/LinkMonitoringCenter';
 
 // ═══════════════════════════════════════════════════════════════════════
 //  أنواع
@@ -151,6 +152,8 @@ export default function LinkDashboardView({ accountId }: { accountId: string | n
   const [filterStatus, setFilterStatus] = useState('');
   const [filterType,   setFilterType]   = useState('');
   const [sortBy,    setSortBy]   = useState('discovered_at');
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
   const searchRef = useRef<any>(null);
 
   // ── تحديد الروابط
@@ -189,17 +192,17 @@ export default function LinkDashboardView({ accountId }: { accountId: string | n
     if (!accountId) return;
     setLoadingLinks(true);
     try {
-      const params = new URLSearchParams({ limit: '300', sortBy, sortDir: 'DESC' });
+      const params = new URLSearchParams({ page: String(page), pageSize: '50', limit: '50', sortBy, sortDir: 'DESC' });
       if (search)       params.set('search',   search);
       if (filterStatus) params.set('status',   filterStatus);
       if (filterType)   params.set('linkType', filterType);
 
       const r = await authFetch(`${API}/accounts/${accountId}/links/discovered?${params}`);
       const d = await r.json();
-      if (d.success) setLinks(d.links || []);
+      if (d.success) { setLinks(d.links || []); setTotalPages(Math.max(1, Number(d.totalPages || 1))); }
     } catch (e) { console.error(e); }
     finally { setLoadingLinks(false); }
-  }, [accountId, search, filterStatus, filterType, sortBy]);
+  }, [accountId, search, filterStatus, filterType, sortBy, page]);
 
   const fetchStats = useCallback(async () => {
     if (!accountId) return;
@@ -517,6 +520,8 @@ export default function LinkDashboardView({ accountId }: { accountId: string | n
         </div>
       </div>
 
+      <LinkMonitoringCenter stats={stats} job={scanJob} accounts={accounts} realtime={scanRealtime} onStart={handleStartScan} onStop={handleStopScan} onPause={() => handleScanAction('pause')} onResume={() => handleScanAction('resume')} onRetry={() => handleScanAction('retry')} onSync={() => { fetchLinks(); fetchStats(); fetchScanStatus(); }} onOpenLog={() => { setShowLog(true); fetchHistory(); }} />
+
       {/* ── شريط تقدم الفحص ─────────────────────────────────────────── */}
       {scanJob && scanJob.status !== 'idle' && (
         <Card className="card flex-shrink-0">
@@ -639,7 +644,7 @@ export default function LinkDashboardView({ accountId }: { accountId: string | n
         {Object.entries(LINK_TYPE_CFG).map(([type, cfg]) => (
           <button
             key={type}
-            onClick={() => setFilterType(filterType === type ? '' : type)}
+            onClick={() => { setFilterType(filterType === type ? '' : type); setPage(1); }}
             className={cn(
               'flex items-center gap-2 px-3 py-2 rounded-lg border text-xs transition-all',
               filterType === type
@@ -682,7 +687,7 @@ export default function LinkDashboardView({ accountId }: { accountId: string | n
           <select
             className="input h-8 text-xs w-32"
             value={filterStatus}
-            onChange={e => { setFilterStatus(e.target.value); setTimeout(fetchLinks, 100); }}
+            onChange={e => { setFilterStatus(e.target.value); setPage(1); setTimeout(fetchLinks, 100); }}
           >
             <option value="">كل الحالات</option>
             <option value="new">جاهز للمعالجة</option>
@@ -932,11 +937,9 @@ export default function LinkDashboardView({ accountId }: { accountId: string | n
             {selected.size > 0 && (
               <span className="text-[var(--brand-primary)] font-medium">{selected.size} محدد • </span>
             )}
-            {links.length} رابط مكتشف
+            {links.length} رابط في الصفحة · إجمالي الصفحات: {totalPages}
           </span>
-          {stats?.lastDiscovered && (
-            <span>آخر اكتشاف: {new Date(stats.lastDiscovered).toLocaleString('ar-SA')}</span>
-          )}
+          <div className="flex items-center gap-2"><button disabled={page<=1} onClick={() => setPage(p=>Math.max(1,p-1))} className="rounded border border-[var(--border-default)] px-2 py-1 disabled:opacity-40">السابق</button><span>صفحة {page} من {totalPages}</span><button disabled={page>=totalPages} onClick={() => setPage(p=>Math.min(totalPages,p+1))} className="rounded border border-[var(--border-default)] px-2 py-1 disabled:opacity-40">التالي</button>{stats?.lastDiscovered && <span className="hidden md:inline">آخر اكتشاف: {new Date(stats.lastDiscovered).toLocaleString('ar-SA')}</span>}</div>
         </div>
       </Card>
 

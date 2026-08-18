@@ -248,7 +248,7 @@ class LinkScanController {
 
       const [
         total, byStatus, byType, duplicates, recent,
-        joinedToday, failedToday,
+        joinedToday, failedToday, newToday, newHour,
       ] = await Promise.all([
         accountDB.get(`SELECT COUNT(*) AS cnt FROM discovered_links`),
         accountDB.all(`SELECT status, COUNT(*) AS cnt FROM discovered_links GROUP BY status`),
@@ -259,6 +259,8 @@ class LinkScanController {
         accountDB.get(`SELECT discovered_at FROM discovered_links ORDER BY discovered_at DESC LIMIT 1`),
         accountDB.get(`SELECT COUNT(*) AS cnt FROM discovered_links WHERE status='joined' AND joined_at >= NOW() - INTERVAL '1 day'`),
         accountDB.get(`SELECT COUNT(*) AS cnt FROM discovered_links WHERE status='failed' AND updated_at >= NOW() - INTERVAL '1 day'`),
+        accountDB.get(`SELECT COUNT(*) AS cnt FROM discovered_links WHERE discovered_at >= NOW() - INTERVAL '1 day'`),
+        accountDB.get(`SELECT COUNT(*) AS cnt FROM discovered_links WHERE discovered_at >= NOW() - INTERVAL '1 hour'`),
       ]);
 
       const statusMap = {};
@@ -290,8 +292,11 @@ class LinkScanController {
           duplicates:     duplicates?.cnt || 0,
           lastDiscovered: recent?.discovered_at || null,
           byType:         byType || [],
-          joinedToday:    joinedToday?.cnt || 0,
-          failedToday:    failedToday?.cnt || 0,
+                    joinedToday:   joinedToday?.cnt || 0,
+          failedToday:   failedToday?.cnt || 0,
+          newToday:      newToday?.cnt || 0,
+          newHour:       newHour?.cnt || 0,
+          health:        { database: 'healthy', monitoringEngine: scanJob && ['running','processing','queued','retrying','waiting'].includes(scanJob.status) ? 'running' : 'idle' },
           scan:           scanJob,
         },
       });
