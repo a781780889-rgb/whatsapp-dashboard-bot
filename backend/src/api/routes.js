@@ -259,6 +259,8 @@ router.get('/links/import/accounts', auth, LinkImportController.accounts.bind(Li
 router.get('/links/import/settings', auth, LinkImportController.settings.bind(LinkImportController));
 router.put('/links/import/settings', auth, LinkImportController.saveSettings.bind(LinkImportController));
 router.post('/links/import/start', auth, LinkImportController.start.bind(LinkImportController));
+router.post('/links/import/jobs/:jobId/accounts/:targetAccountId/pause', auth, LinkImportController.pauseAccount.bind(LinkImportController));
+router.post('/links/import/jobs/:jobId/accounts/:targetAccountId/resume', auth, LinkImportController.resumeAccount.bind(LinkImportController));
 router.get('/links/import/jobs', auth, LinkImportController.jobs.bind(LinkImportController));
 router.get('/links/import/jobs/:jobId', auth, LinkImportController.job.bind(LinkImportController));
 router.post('/links/import/jobs/:jobId/:action', auth, LinkImportController.control.bind(LinkImportController));
