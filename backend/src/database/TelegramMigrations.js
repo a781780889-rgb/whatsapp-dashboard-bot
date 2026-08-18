@@ -89,6 +89,24 @@ const TelegramMigrations = {
             await query(`ALTER TABLE whatsapp_links ADD COLUMN IF NOT EXISTS copied_at TIMESTAMPTZ`).catch(() => {});
             await query(`CREATE INDEX IF NOT EXISTS idx_whatsapp_links_copied ON whatsapp_links(copied, discovered_at DESC) WHERE deleted=false`).catch(() => {});
 
+            // ── الرسائل المتجاهلة في مركز كلمات تيليجرام ────────────────
+            await query(`
+                CREATE TABLE IF NOT EXISTS telegram_ignored_messages (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    telegram_account_id UUID NOT NULL,
+                    chat_id TEXT NOT NULL,
+                    message_id TEXT NOT NULL,
+                    sender_id TEXT,
+                    message_hash TEXT,
+                    ignored_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    ignored_by UUID,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE (telegram_account_id, chat_id, message_id)
+                )
+            `);
+            await query(`CREATE INDEX IF NOT EXISTS idx_tg_ignored_lookup ON telegram_ignored_messages(telegram_account_id, chat_id, message_id)`).catch(() => {});
+            await query(`CREATE INDEX IF NOT EXISTS idx_tg_ignored_hash ON telegram_ignored_messages(message_hash) WHERE message_hash IS NOT NULL`).catch(() => {});
+
             // ── مركز كلمات تيليجرام ─────────────────────────────────────
             await query(`
                 CREATE TABLE IF NOT EXISTS telegram_keywords (
