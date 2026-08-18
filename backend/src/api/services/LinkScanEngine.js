@@ -60,6 +60,11 @@ function extractLinksFromText(text) {
   return [...found];
 }
 
+function messageText(msg) {
+  const body = msg?.message || {};
+  return body.conversation || body.extendedTextMessage?.text || body.imageMessage?.caption || body.videoMessage?.caption || body.documentMessage?.caption || body.buttonsResponseMessage?.selectedDisplayText || body.listResponseMessage?.title || '';
+}
+
 function detectLinkType(url) {
   if (/chat\.whatsapp\.com/.test(url)) return 'whatsapp_group';
   if (/wa\.me/.test(url)) return 'whatsapp_group';
@@ -121,6 +126,38 @@ class LinkScanEngine {
 
   async _recordEvent(accountId, job, eventType, message, details = {}) {
     try { const db = job._accountDB || await DatabaseManager.getAccountDB(accountId); await db.run(`INSERT INTO link_scan_events (job_id,account_id,event_type,message,details) VALUES ($1,$2,$3,$4,$5)`, [job.id, accountId, eventType, message, JSON.stringify(details)]); } catch (eventError) { console.warn(`[LinkScanEngine] event persistence failed: ${eventError.message}`); }
+  }
+
+  // معالجة دفعات history التي يرسلها Baileys، مع حفظ حالة كل مجموعة ورسالة.
+  async ingestHistory(accountId, payload = {}) {
+    let job = this._jobs.get(String(accountId));
+    if (!job) { await this.loadJob(accountId); job = this._jobs.get(String(accountId)); }
+    if (!job || !['queued','running','waiting','processing','retrying'].includes(job.status)) return;
+    const db = job._accountDB || await DatabaseManager.getAccountDB(accountId);
+    await this._ensureTables(db);
+    const messages = Array.isArray(payload.messages) ? payload.messages : [];
+    let processed = 0;
+    for (const msg of messages) {
+      const groupJid = msg?.key?.remoteJid;
+      const messageId = msg?.key?.id;
+      if (!groupJid?.endsWith('@g.us') || !messageId) continue;
+      const inserted = await db.run(`INSERT INTO link_scan_processed_messages(job_id,account_id,message_id,group_jid,phase) VALUES($1,$2,$3,$4,$5) ON CONFLICT(job_id,account_id,message_id) DO NOTHING`, [job.id, accountId, messageId, groupJid, payload.phase || 'history']).catch(() => null);
+      if (inserted && Number(inserted.rowCount ?? inserted.changes ?? 1) === 0) continue;
+      const text = messageText(msg);
+      const links = extractLinksFromText(text);
+      const timestamp = msg.messageTimestamp ? new Date(Number(msg.messageTimestamp) * 1000).toISOString() : null;
+      for (const url of links) {
+        const result = await this._saveLink(db, accountId, url, detectLinkType(url), groupJid, job, { messageId, messageTimestamp: timestamp, source: payload.phase || 'history' });
+        if (result === 'new') job.found = (job.found || 0) + 1;
+        else if (result === 'duplicate') job.duplicates = (job.duplicates || 0) + 1;
+      }
+      await db.run(`INSERT INTO link_scan_group_cursors(job_id,account_id,group_jid,last_message_id,last_message_timestamp,messages_scanned,links_found,status,last_scan_at,updated_at) VALUES($1,$2,$3,$4,$5,1,$6,$7,NOW(),NOW()) ON CONFLICT(job_id,account_id,group_jid) DO UPDATE SET last_message_id=$4,last_message_timestamp=$5,messages_scanned=link_scan_group_cursors.messages_scanned+1,links_found=link_scan_group_cursors.links_found+$6,status=$7,last_scan_at=NOW(),updated_at=NOW()`, [job.id, accountId, groupJid, messageId, timestamp, links.length, payload.isLatest === true ? 'completed' : 'scanning']).catch(() => {});
+      processed++;
+    }
+    job.scanned = (job.scanned || 0) + processed;
+    job.lastActivityAt = new Date().toISOString();
+    if (payload.isLatest === true) { job.historyCompleted = true; job.log.push({ ts: new Date().toISOString(), msg: '✅ اكتملت دفعة التاريخ المتاحة وانتقلت المراقبة إلى الرسائل الحية' }); }
+    await this._persistJob(accountId, job); this._emit(accountId, job);
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -286,12 +323,33 @@ class LinkScanEngine {
       }
 
       if (!job._abort && job.status !== 'paused' && job.status !== 'stopped') {
+        const historyGroups = chats.filter(chat => chat.isGroup !== false && chat.id?.endsWith('@g.us'));
+        if (typeof sock.fetchMessageHistory === 'function' && historyGroups.length) {
+          job.status = 'waiting';
+          job.source = 'whatsapp_history';
+          job.log.push({ ts: new Date().toISOString(), msg: `⏳ تم فحص ${historyGroups.length} مجموعة، وجارٍ طلب التاريخ المتاح للرسائل...` });
+          await this._persistJob(accountId, job); this._emit(accountId, job);
+          for (const group of historyGroups) {
+            if (job._abort || job.status === 'paused' || job.status === 'stopped') break;
+            try {
+              await sock.fetchMessageHistory(500, { remoteJid: group.id, fromMe: false, id: `LINK_SCAN_${job.id}`, participant: undefined }, Math.floor(Date.now() / 1000));
+              await this._recordEvent(accountId, job, 'history_requested', `تم طلب التاريخ المتاح للمجموعة: ${group.name || group.id}`, { groupJid: group.id });
+              await sleep(100);
+            } catch (historyError) {
+              job.review = (job.review || 0) + 1;
+              await this._recordEvent(accountId, job, 'history_unavailable', `تعذر طلب تاريخ المجموعة دون إيقاف بقية المجموعات: ${historyError.message}`, { groupJid: group.id });
+            }
+          }
+          job.log.push({ ts: new Date().toISOString(), msg: '📚 بانتظار دفعات messaging-history.set؛ لن تُعلن المهمة مكتملة قبل وصول علامة النهاية من المصدر.' });
+          await this._persistJob(accountId, job); this._emit(accountId, job);
+          return;
+        }
         job.status = 'finished';
         job.progress = 100;
         job.finishedAt = new Date().toISOString();
         job.log.push({
           ts: new Date().toISOString(),
-          msg: `✅ اكتمل الفحص — وُجد ${job.found} رابط جديد، ${job.duplicates} مكرر`,
+          msg: `✅ اكتمل الفحص — وُجد ${job.found} رابط جديد، ${job.duplicates} مكرر${historyGroups.length ? '؛ لم تتوفر واجهة طلب تاريخ الرسائل' : ''}`,
         });
       }
 
@@ -421,13 +479,20 @@ class LinkScanEngine {
   // ══════════════════════════════════════════════════════════════════════════
   //  حفظ رابط في قاعدة البيانات
   // ══════════════════════════════════════════════════════════════════════════
-  async _saveLink(accountDB, accountId, url, linkType, groupJid, job = null) {
+  async _saveLink(accountDB, accountId, url, linkType, groupJid, job = null, meta = {}) {
     try {
       const normalized = canonicalizeUrl(url); if (!normalized) return 'invalid';
       const hash = linkHash(normalized);
-      const result = await accountDB.run(`INSERT INTO discovered_links (url,normalized_url,url_hash,link_type,group_jid,discovered_by_account,status,verification_status,join_attempts,discovered_at,first_seen_at,last_seen_at,appearance_count,scan_id,source,updated_at) VALUES ($1,$2,$3,$4,$5,$6,'new','needs_review',0,NOW(),NOW(),NOW(),1,$7,$8,NOW()) ON CONFLICT (url) DO NOTHING RETURNING id`, [url, normalized, hash, linkType, groupJid || null, accountId, job?.id || null, job?.source || 'whatsapp_live']);
-      const inserted = Array.isArray(result?.rows) ? result.rows.length > 0 : Number(result?.rowCount ?? result?.changes ?? 0) > 0;
-      if (!inserted) await accountDB.run(`UPDATE discovered_links SET normalized_url=COALESCE(normalized_url,$2),url_hash=COALESCE(url_hash,$3),last_seen_at=NOW(),appearance_count=COALESCE(appearance_count,0)+1,updated_at=NOW() WHERE url=$1`, [url, normalized, hash]);
+      const existing = await accountDB.get(`SELECT id FROM discovered_links WHERE url_hash=$1 OR normalized_url=$2 OR url=$3 LIMIT 1`, [hash, normalized, url]).catch(() => null);
+      let inserted = false;
+      let linkId = existing?.id || null;
+      if (!existing) {
+        const result = await accountDB.run(`INSERT INTO discovered_links (url,normalized_url,url_hash,link_type,group_jid,discovered_by_account,status,verification_status,join_attempts,discovered_at,first_seen_at,last_seen_at,appearance_count,scan_id,source,updated_at) VALUES ($1,$2,$3,$4,$5,$6,'new','needs_review',0,NOW(),NOW(),NOW(),1,$7,$8,NOW()) ON CONFLICT (url) DO NOTHING RETURNING id`, [url, normalized, hash, linkType, groupJid || null, accountId, job?.id || null, meta.source || job?.source || 'whatsapp_live']);
+        inserted = Array.isArray(result?.rows) ? result.rows.length > 0 : Number(result?.rowCount ?? result?.changes ?? 0) > 0;
+        linkId = result?.rows?.[0]?.id || linkId;
+      }
+      if (!inserted) await accountDB.run(`UPDATE discovered_links SET normalized_url=COALESCE(normalized_url,$2),url_hash=COALESCE(url_hash,$3),last_seen_at=NOW(),appearance_count=COALESCE(appearance_count,0)+1,updated_at=NOW() WHERE id=$4 OR url=$1`, [url, normalized, hash, linkId]).catch(() => {});
+      if (job?.id && linkId && meta.messageId) await accountDB.run(`INSERT INTO link_scan_link_sources(job_id,link_id,account_id,group_jid,message_id,message_timestamp,source_type) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`, [job.id, linkId, accountId, groupJid || null, meta.messageId, meta.messageTimestamp || null, meta.source || 'message_text']).catch(() => {});
       return inserted ? 'new' : 'duplicate';
     } catch (err) { const info=classifyScanError(err); if(info.type==='RETRYABLE') throw err; return 'error'; }
   }
@@ -453,6 +518,10 @@ class LinkScanEngine {
         updated_at            TIMESTAMPTZ DEFAULT NOW()
       )
     `).catch(() => {});
+
+    await accountDB.run(`CREATE TABLE IF NOT EXISTS link_scan_processed_messages (job_id TEXT NOT NULL, account_id TEXT NOT NULL, message_id TEXT NOT NULL, group_jid TEXT, phase TEXT NOT NULL DEFAULT 'history', processed_at TIMESTAMPTZ DEFAULT NOW(), PRIMARY KEY(job_id,account_id,message_id))`).catch(() => {});
+    await accountDB.run(`CREATE TABLE IF NOT EXISTS link_scan_group_cursors (job_id TEXT NOT NULL, account_id TEXT NOT NULL, group_jid TEXT NOT NULL, last_message_id TEXT, last_message_timestamp TIMESTAMPTZ, oldest_message_id TEXT, oldest_message_timestamp TIMESTAMPTZ, messages_scanned INTEGER DEFAULT 0, links_found INTEGER DEFAULT 0, links_saved INTEGER DEFAULT 0, duplicates_found INTEGER DEFAULT 0, status TEXT DEFAULT 'scanning', error_count INTEGER DEFAULT 0, retry_count INTEGER DEFAULT 0, last_scan_at TIMESTAMPTZ, next_scan_at TIMESTAMPTZ, updated_at TIMESTAMPTZ DEFAULT NOW(), PRIMARY KEY(job_id,account_id,group_jid))`).catch(() => {});
+    await accountDB.run(`CREATE TABLE IF NOT EXISTS link_scan_link_sources (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), job_id TEXT NOT NULL, link_id UUID, account_id TEXT, group_jid TEXT, message_id TEXT, message_timestamp TIMESTAMPTZ, source_type TEXT NOT NULL DEFAULT 'message_text', created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(job_id,account_id,group_jid,message_id,link_id))`).catch(() => {});
 
     // إضافة الأعمدة الناقصة إن وُجدت
     const cols = [
