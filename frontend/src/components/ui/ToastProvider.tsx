@@ -26,8 +26,13 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   const addToast = useCallback((t: Omit<Toast, 'id'>) => {
+    if (!t || typeof t !== 'object') return;
+    const title = typeof t.title === 'string' ? t.title.trim() : '';
+    const description = typeof t.description === 'string' ? t.description.trim() : '';
+    const validTypes = new Set<Toast['type']>(['success', 'error', 'warning', 'info']);
+    if ((!title && !description) || !validTypes.has(t.type)) return;
     const id = Math.random().toString(36).substring(2, 9);
-    setToasts(prev => [...prev, { ...t, id }]);
+    setToasts(prev => [...prev.slice(-3), { ...t, title, description: description || undefined, id }]);
   }, []);
 
   const removeToast = useCallback((id: string) => {
