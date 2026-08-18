@@ -108,6 +108,26 @@ const TelegramMigrations = {
             await query(`CREATE INDEX IF NOT EXISTS idx_tg_ignored_lookup ON telegram_ignored_messages(telegram_account_id, chat_id, message_id)`).catch(() => {});
             await query(`CREATE INDEX IF NOT EXISTS idx_tg_ignored_hash ON telegram_ignored_messages(message_hash) WHERE message_hash IS NOT NULL`).catch(() => {});
 
+            // ── المستخدمون المحظورون في مركز كلمات تيليجرام ─────────────
+            await query(`
+                CREATE TABLE IF NOT EXISTS telegram_keyword_blocked_users (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    user_id UUID NOT NULL,
+                    telegram_user_id TEXT NOT NULL,
+                    telegram_username TEXT,
+                    display_name TEXT,
+                    blocked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    blocked_by UUID,
+                    reason TEXT,
+                    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE (user_id, telegram_user_id)
+                )
+            `);
+            await query(`CREATE INDEX IF NOT EXISTS idx_tg_blocked_users_active ON telegram_keyword_blocked_users(user_id, is_active, telegram_user_id)`).catch(() => {});
+            await query(`CREATE INDEX IF NOT EXISTS idx_tg_blocked_users_search ON telegram_keyword_blocked_users(user_id, telegram_username, display_name)`).catch(() => {});
+
             // ── مركز كلمات تيليجرام ─────────────────────────────────────
             await query(`
                 CREATE TABLE IF NOT EXISTS telegram_keywords (

@@ -583,6 +583,9 @@ router.delete("/telegram-keywords/:id",                auth, TelegramKeywordCont
 router.post  ("/telegram-keywords/results/:id/open",   auth, TelegramKeywordController.openDirectChat.bind(TelegramKeywordController));
 router.post  ("/telegram-keywords/results/:id/reply",  auth, TelegramKeywordController.reply.bind(TelegramKeywordController));
 router.post  ("/telegram-keywords/results/:id/ignore", auth, TelegramKeywordController.ignore.bind(TelegramKeywordController));
+router.post  ("/telegram-keywords/results/:id/block-user", auth, TelegramKeywordController.blockUser.bind(TelegramKeywordController));
+router.get   ("/telegram-keywords/blocked-users", auth, TelegramKeywordController.blockedUsers.bind(TelegramKeywordController));
+router.patch ("/telegram-keywords/blocked-users/:id/unblock", auth, TelegramKeywordController.unblockUser.bind(TelegramKeywordController));
 
 // ── روابط واتساب المكتشفة (تتطلب مصادقة) ───────────
 // ⚠️ المسارات الثابتة (export / bulk-delete) قبل /:id
