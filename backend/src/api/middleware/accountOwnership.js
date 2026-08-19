@@ -82,4 +82,26 @@ async function requireRequestedAccountOwnership(req, res, next) {
   }
 }
 
-module.exports = { ADMIN_ROLES, currentUserId, isAdmin, userScope, requireAccountOwnership, requireRequestedAccountOwnership };
+async function requireTelegramAccountOwnership(req, res, next) {
+  const accountId = req.params.id || req.params.accountId;
+  const userId = currentUserId(req);
+  if (!accountId) return res.status(400).json({ success: false, error: 'معرف حساب Telegram مطلوب.' });
+  if (!userId) return res.status(401).json({ success: false, error: 'غير مصرح.' });
+  try {
+    const account = await DatabaseManager.systemDB.get(
+      'SELECT id, user_id, status FROM telegram_accounts WHERE id = $1',
+      [accountId]
+    );
+    if (!account) return res.status(404).json({ success: false, error: 'حساب Telegram غير موجود.' });
+    if (!isAdmin(req) && account.user_id !== userId) {
+      return res.status(403).json({ success: false, error: 'غير مصرح بالوصول إلى حساب Telegram هذا.' });
+    }
+    req.telegramAccount = account;
+    return next();
+  } catch (error) {
+    console.error('[TelegramAccountOwnership] authorization failed:', error.message);
+    return res.status(500).json({ success: false, error: 'تعذر التحقق من ملكية حساب Telegram.' });
+  }
+}
+
+module.exports = { ADMIN_ROLES, currentUserId, isAdmin, userScope, requireAccountOwnership, requireRequestedAccountOwnership, requireTelegramAccountOwnership };

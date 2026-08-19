@@ -106,7 +106,7 @@ router.get('/admin/accounts/:id/qr-debug', auth, role('admin'), async (req, res)
 //  ACCOUNTS
 // ══════════════════════════════════════════════════════
 const AccountController = require('./controllers/AccountController');
-const { requireAccountOwnership, requireRequestedAccountOwnership } = require('./middleware/accountOwnership');
+const { requireAccountOwnership, requireRequestedAccountOwnership, requireTelegramAccountOwnership } = require('./middleware/accountOwnership');
 
 router.post('/accounts',                   auth, subscriptionCheck, accountLimitCheck, AccountController.createAccount.bind(AccountController));
 router.get('/accounts',                    auth, subscriptionCheck, listAccountsLimiter, AccountController.listAccounts.bind(AccountController));
@@ -580,6 +580,8 @@ router.delete("/telegram/auth/:id",                       auth, TelegramAuthCont
 router.get   ("/telegram/accounts",                    auth, TelegramController.listAccounts.bind(TelegramController));
 router.get   ("/telegram/accounts/workers",            auth, TelegramController.getWorkersStatus.bind(TelegramController));
 router.get   ("/telegram/accounts/stats",              auth, TelegramController.getStats.bind(TelegramController));
+// Static Telegram routes are above; protect every dynamic account operation below.
+router.use('/telegram/accounts/:id', auth, requireTelegramAccountOwnership);
 router.get   ("/telegram/accounts/:id",                auth, TelegramController.getAccount.bind(TelegramController));
 router.put   ("/telegram/accounts/:id",                auth, TelegramController.updateAccount.bind(TelegramController));
 router.delete("/telegram/accounts/:id",                auth, TelegramController.deleteAccount.bind(TelegramController));

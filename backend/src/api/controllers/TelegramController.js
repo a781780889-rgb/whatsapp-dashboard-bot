@@ -6,6 +6,9 @@
 const TelegramService = require('../services/TelegramService');
 const { queryAll, queryOne, query } = require('../../lib/postgres');
 const { v4: uuidv4 } = require('uuid');
+const ADMIN_ROLES = new Set(['super_admin', 'superadmin', 'admin', 'owner']);
+const isAdminUser = req => ADMIN_ROLES.has(req.user?.role);
+const currentUserId = req => req.user?.id || req.user?.userId || null;
 
 const TelegramController = {
 
@@ -83,6 +86,7 @@ const TelegramController = {
             const { id } = req.params;
             const account = await queryOne(`SELECT * FROM telegram_accounts WHERE id = $1`, [id]);
             if (!account) return res.status(404).json({ success: false, error: 'الحساب غير موجود' });
+            if (!isAdminUser(req) && account.user_id !== currentUserId(req)) return res.status(403).json({ success: false, error: 'غير مصرح بالوصول إلى هذا الحساب' });
             const { session_string, session_encrypted, api_hash, bot_token, ...publicAccount } = account;
             publicAccount.bot_token = bot_token ? `${bot_token.slice(0, 10)}...` : null;
             return res.json({ success: true, account: publicAccount });
@@ -98,6 +102,7 @@ const TelegramController = {
             const { name, phone_number, api_id, api_hash, session_string, bot_token, notes } = req.body;
 
             const account = await queryOne(`SELECT * FROM telegram_accounts WHERE id = $1`, [id]);
+            if (account && !isAdminUser(req) && account.user_id !== currentUserId(req)) return res.status(403).json({ success: false, error: 'غير مصرح بتعديل هذا الحساب' });
             if (!account) return res.status(404).json({ success: false, error: 'الحساب غير موجود' });
 
             await query(
@@ -141,6 +146,7 @@ const TelegramController = {
             const { id } = req.params;
             const account = await queryOne(`SELECT * FROM telegram_accounts WHERE id = $1`, [id]);
             if (!account) return res.status(404).json({ success: false, error: 'الحساب غير موجود' });
+            if (!isAdminUser(req) && account.user_id !== currentUserId(req)) return res.status(403).json({ success: false, error: 'غير مصرح بحذف هذا الحساب' });
 
             TelegramService.stopWorker(id);
             await query(`DELETE FROM telegram_accounts WHERE id = $1`, [id]);
@@ -157,6 +163,7 @@ const TelegramController = {
             const { id } = req.params;
             const account = await queryOne(`SELECT * FROM telegram_accounts WHERE id = $1`, [id]);
             if (!account) return res.status(404).json({ success: false, error: 'الحساب غير موجود' });
+            if (!isAdminUser(req) && account.user_id !== currentUserId(req)) return res.status(403).json({ success: false, error: 'غير مصرح بتشغيل هذا الحساب' });
             const configuredApiId = account.api_id || process.env.TELEGRAM_API_ID || process.env.TELEGRAM_APP_ID || process.env.TELEGRAM_APIID;
             const configuredApiHash = account.api_hash || process.env.TELEGRAM_API_HASH || process.env.TELEGRAM_APP_HASH || process.env.TELEGRAM_APIHASH;
             if (!(account.session_encrypted || account.session_string) || !configuredApiId || !configuredApiHash) {
@@ -174,6 +181,10 @@ const TelegramController = {
     async stopWorker(req, res) {
         try {
             const { id } = req.params;
+            if (!isAdminUser(req)) {
+                const owned = await queryOne(`SELECT id FROM telegram_accounts WHERE id=$1 AND user_id=$2`, [id, currentUserId(req)]);
+                if (!owned) return res.status(403).json({ success: false, error: 'غير مصرح بإيقاف هذا الحساب' });
+            }
             TelegramService.stopWorker(id);
             return res.json({ success: true, message: 'تم إيقاف المراقبة' });
         } catch (err) {
@@ -246,6 +257,10 @@ const TelegramController = {
             let pIdx = 1;
 
             conditions.push(`wl.deleted = false`);
+            if (!isAdminUser(req)) {
+                conditions.push(`EXISTS (SELECT 1 FROM telegram_accounts ta_scope WHERE ta_scope.id = wl.source_account_id AND ta_scope.user_id = $${pIdx++})`);
+                params.push(currentUserId(req));
+            }
 
             if (status)     { conditions.push(`wl.status = $${pIdx++}`);             params.push(status); }
             if (copied === 'true')  { conditions.push(`wl.copied = true`); }
@@ -303,8 +318,16 @@ const TelegramController = {
                 return res.status(400).json({ success: false, error: 'لا توجد بيانات للتحديث' });
             }
 
-            params.push(id);
-            await query(`UPDATE whatsapp_links SET ${sets.join(',')} WHERE id=$${idx}`, params);
+            if (!isAdminUser(req)) {
+                params.push(currentUserId(req));
+                sets.push(`updated_at=NOW()`);
+                const ownerParam = params.length;
+                params.push(id);
+                await query(`UPDATE whatsapp_links SET ${sets.join(',')} WHERE id=$${params.length} AND EXISTS (SELECT 1 FROM telegram_accounts ta_scope WHERE ta_scope.id=whatsapp_links.source_account_id AND ta_scope.user_id=$${ownerParam})`, params);
+            } else {
+                params.push(id);
+                await query(`UPDATE whatsapp_links SET ${sets.join(',')} WHERE id=$${params.length}`, params);
+            }
 
             return res.json({ success: true });
         } catch (err) {
@@ -318,6 +341,10 @@ const TelegramController = {
             const { ids, copyAll = false } = req.body || {};
             const conditions = ['deleted = false', 'copied = false'];
             const params = [];
+            if (!isAdminUser(req)) {
+                params.push(currentUserId(req));
+                conditions.push(`EXISTS (SELECT 1 FROM telegram_accounts ta_scope WHERE ta_scope.id=whatsapp_links.source_account_id AND ta_scope.user_id=$${params.length})`);
+            }
             if (!copyAll) {
                 if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ success: false, error: 'يرجى تحديد روابط للنسخ' });
                 params.push(ids);
@@ -337,7 +364,11 @@ const TelegramController = {
     async deleteLink(req, res) {
         try {
             const { id } = req.params;
-            await query(`UPDATE whatsapp_links SET deleted=true, status='deleted' WHERE id=$1`, [id]);
+            if (isAdminUser(req)) {
+                await query(`UPDATE whatsapp_links SET deleted=true, status='deleted' WHERE id=$1`, [id]);
+            } else {
+                await query(`UPDATE whatsapp_links SET deleted=true, status='deleted' WHERE id=$1 AND EXISTS (SELECT 1 FROM telegram_accounts ta_scope WHERE ta_scope.id=whatsapp_links.source_account_id AND ta_scope.user_id=$2)`, [id, currentUserId(req)]);
+            }
             return res.json({ success: true });
         } catch (err) {
             return res.status(500).json({ success: false, error: err.message });
@@ -350,14 +381,19 @@ const TelegramController = {
             const { ids, deleteJoined } = req.body;
 
             if (deleteJoined) {
-                await query(`UPDATE whatsapp_links SET deleted=true, status='deleted' WHERE joined=true`);
+                if (isAdminUser(req)) {
+                    await query(`UPDATE whatsapp_links SET deleted=true, status='deleted' WHERE joined=true`);
+                } else {
+                    await query(`UPDATE whatsapp_links SET deleted=true, status='deleted' WHERE joined=true AND EXISTS (SELECT 1 FROM telegram_accounts ta_scope WHERE ta_scope.id=whatsapp_links.source_account_id AND ta_scope.user_id=$1)`, [currentUserId(req)]);
+                }
                 return res.json({ success: true });
             }
             if (ids && Array.isArray(ids) && ids.length) {
-                await query(
-                    `UPDATE whatsapp_links SET deleted=true, status='deleted' WHERE id = ANY($1::uuid[])`,
-                    [ids]
-                );
+                if (isAdminUser(req)) {
+                    await query(`UPDATE whatsapp_links SET deleted=true, status='deleted' WHERE id = ANY($1::uuid[])`, [ids]);
+                } else {
+                    await query(`UPDATE whatsapp_links SET deleted=true, status='deleted' WHERE id = ANY($1::uuid[]) AND EXISTS (SELECT 1 FROM telegram_accounts ta_scope WHERE ta_scope.id=whatsapp_links.source_account_id AND ta_scope.user_id=$2)`, [ids, currentUserId(req)]);
+                }
                 return res.json({ success: true });
             }
             return res.status(400).json({ success: false, error: 'يرجى تحديد روابط للحذف' });
@@ -371,8 +407,12 @@ const TelegramController = {
         try {
             const { status, account_id } = req.query;
             const conditions = ['deleted = false'];
-            const params     = [];
+            const params = [];
             let pIdx = 1;
+            if (!isAdminUser(req)) {
+                conditions.push(`EXISTS (SELECT 1 FROM telegram_accounts ta_scope WHERE ta_scope.id = source_account_id AND ta_scope.user_id = $${pIdx++})`);
+                params.push(currentUserId(req));
+            }
 
             if (status)     { conditions.push(`status = $${pIdx++}`);            params.push(status); }
             if (account_id) { conditions.push(`source_account_id = $${pIdx++}`); params.push(account_id); }
@@ -404,21 +444,28 @@ const TelegramController = {
     // ── إحصائيات ─────────────────────────────────────────────────────────────
     async getStats(req, res) {
         try {
-            const totalAccounts     = await queryOne(`SELECT COUNT(*) as cnt FROM telegram_accounts`);
-            const connectedAccounts = await queryOne(`SELECT COUNT(*) as cnt FROM telegram_accounts WHERE status='connected'`);
-            const totalLinks        = await queryOne(`SELECT COUNT(*) as cnt FROM whatsapp_links WHERE deleted=false`);
-            const newLinks          = await queryOne(`SELECT COUNT(*) as cnt FROM whatsapp_links WHERE deleted=false AND discovered_at >= NOW() - INTERVAL '24 hours'`);
-            const joinedLinks       = await queryOne(`SELECT COUNT(*) as cnt FROM whatsapp_links WHERE joined=true AND deleted=false`);
-            const deletedLinks      = await queryOne(`SELECT COUNT(*) as cnt FROM whatsapp_links WHERE deleted=true`);
-            const duplicateLinks    = await queryOne(`SELECT COALESCE(SUM(duplicate_count),0) as cnt FROM whatsapp_links WHERE duplicate_count > 0`);
-            const copiedLinks       = await queryOne(`SELECT COUNT(*) as cnt FROM whatsapp_links WHERE copied=true AND deleted=false`);
+            const admin = isAdminUser(req);
+            const uid = currentUserId(req);
+            const accountScope = admin ? '' : ' AND user_id=$1';
+            const linkScope = admin ? '' : ' AND EXISTS (SELECT 1 FROM telegram_accounts ta_scope WHERE ta_scope.id=whatsapp_links.source_account_id AND ta_scope.user_id=$1)';
+            const scopeParams = admin ? [] : [uid];
+            const totalAccounts     = await queryOne(`SELECT COUNT(*) as cnt FROM telegram_accounts WHERE TRUE${accountScope}`, scopeParams);
+            const connectedAccounts = await queryOne(`SELECT COUNT(*) as cnt FROM telegram_accounts WHERE status='connected'${accountScope}`, scopeParams);
+            const totalLinks        = await queryOne(`SELECT COUNT(*) as cnt FROM whatsapp_links WHERE deleted=false${linkScope}`, scopeParams);
+            const newLinks          = await queryOne(`SELECT COUNT(*) as cnt FROM whatsapp_links WHERE deleted=false AND discovered_at >= NOW() - INTERVAL '24 hours'${linkScope}`, scopeParams);
+            const joinedLinks       = await queryOne(`SELECT COUNT(*) as cnt FROM whatsapp_links WHERE joined=true AND deleted=false${linkScope}`, scopeParams);
+            const deletedLinks      = await queryOne(`SELECT COUNT(*) as cnt FROM whatsapp_links WHERE deleted=true${linkScope}`, scopeParams);
+            const duplicateLinks    = await queryOne(`SELECT COALESCE(SUM(duplicate_count),0) as cnt FROM whatsapp_links WHERE duplicate_count > 0${linkScope}`, scopeParams);
+            const copiedLinks       = await queryOne(`SELECT COUNT(*) as cnt FROM whatsapp_links WHERE copied=true AND deleted=false${linkScope}`, scopeParams);
 
             const perAccount = await queryAll(
                 `SELECT ta.id, ta.name, ta.phone_number, ta.bot_username, COUNT(wl.id) as links_count
                  FROM telegram_accounts ta
                  LEFT JOIN whatsapp_links wl ON wl.source_account_id = ta.id AND wl.deleted=false
+                 WHERE ($1::uuid IS NULL OR ta.user_id=$1)
                  GROUP BY ta.id, ta.name, ta.phone_number, ta.bot_username
-                 ORDER BY links_count DESC`
+                 ORDER BY links_count DESC`,
+                [admin ? null : uid]
             );
 
             // حالة الـ workers النشطة
@@ -448,7 +495,12 @@ const TelegramController = {
     // ── حالة الـ workers ──────────────────────────────────────────────────────
     async getWorkersStatus(req, res) {
         try {
-            const workers = TelegramService.getAllWorkersStatus();
+            let workers = TelegramService.getAllWorkersStatus();
+            if (!isAdminUser(req)) {
+                const owned = await queryAll(`SELECT id FROM telegram_accounts WHERE user_id=$1`, [currentUserId(req)]);
+                const ownedIds = new Set(owned.map(row => String(row.id)));
+                workers = workers.filter(worker => ownedIds.has(String(worker.accountId || worker.account_id || worker.id)));
+            }
             return res.json({ success: true, workers });
         } catch (err) {
             return res.status(500).json({ success: false, error: err.message });
