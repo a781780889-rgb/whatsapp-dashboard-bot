@@ -106,6 +106,12 @@ router.get('/admin/accounts/:id/qr-debug', auth, role('admin'), async (req, res)
 //  ACCOUNTS
 // ══════════════════════════════════════════════════════
 const AccountController = require('./controllers/AccountController');
+const { requireAccountOwnership, requireRequestedAccountOwnership } = require('./middleware/accountOwnership');
+
+// Tenant boundary: every /accounts/:accountId/* endpoint must verify ownership
+// before any controller can open the per-account schema or execute an action.
+router.use('/accounts/:accountId', auth, requireAccountOwnership);
+
 router.post('/accounts',                   auth, subscriptionCheck, accountLimitCheck, AccountController.createAccount.bind(AccountController));
 router.get('/accounts',                    auth, subscriptionCheck, listAccountsLimiter, AccountController.listAccounts.bind(AccountController));
 router.get('/accounts/summary',            auth, subscriptionCheck, AccountController.getSummary.bind(AccountController));
@@ -251,6 +257,11 @@ router.put('/accounts/:accountId/links/join-settings', auth, LinkScanController.
 // ══════════════════════════════════════════════════════
 const LinkImportController = require('./controllers/LinkImportController');
 const AutoSearchController = require('./controllers/AutoSearchController');
+
+// Apply tenant validation before every link-import endpoint, including the
+// account selector and job-control routes.
+router.use('/links/import', auth, requireRequestedAccountOwnership);
+
 router.post('/links/import/files', auth, LinkImportController.import.bind(LinkImportController));
 router.get('/links/import/files', auth, LinkImportController.files.bind(LinkImportController));
 router.get('/links/import/files/:fileId', auth, LinkImportController.file.bind(LinkImportController));
@@ -264,7 +275,8 @@ router.post('/links/import/jobs/:jobId/accounts/:targetAccountId/resume', auth, 
 router.get('/links/import/jobs', auth, LinkImportController.jobs.bind(LinkImportController));
 router.get('/links/import/jobs/:jobId', auth, LinkImportController.job.bind(LinkImportController));
 router.post('/links/import/jobs/:jobId/:action', auth, LinkImportController.control.bind(LinkImportController));
-// Automatic link search
+// Automatic link search — validate every accountId/accountIds supplied by the client
+router.use('/auto-search', auth, requireRequestedAccountOwnership);
 router.get('/auto-search/dashboard', auth, AutoSearchController.dashboard.bind(AutoSearchController));
 router.get('/auto-search/accounts', auth, AutoSearchController.accounts.bind(AutoSearchController));
 router.post('/auto-search/start', auth, AutoSearchController.start.bind(AutoSearchController));

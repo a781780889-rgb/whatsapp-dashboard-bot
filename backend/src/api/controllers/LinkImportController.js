@@ -1,5 +1,6 @@
 const LinkImportService = require('../services/LinkImportService');
 const { getPool } = require('../../lib/postgres');
+const { currentUserId, isAdmin } = require('../middleware/accountOwnership');
 
 class LinkImportController {
   async import(req, res) {
@@ -9,7 +10,7 @@ class LinkImportController {
   async files(req, res) { try { res.json({ success: true, files: await LinkImportService.listFiles(req.query.accountId) }); } catch (e) { res.status(500).json({ success: false, error: e.message }); } }
   async file(req, res) { try { res.json({ success: true, ...(await LinkImportService.getFile(req.query.accountId, req.params.fileId)) }); } catch (e) { res.status(500).json({ success: false, error: e.message }); } }
   async reprocess(req, res) { try { res.json({ success: true, ...(await LinkImportService.reprocessFile(req.body.accountId || req.query.accountId, req.params.fileId)) }); } catch (e) { res.status(400).json({ success: false, error: e.message }); } }
-  async accounts(req, res) { try { const r = await getPool().query('SELECT id,name,phone_number,status,health_status,connection_type,last_activity_at FROM accounts ORDER BY created_at DESC'); res.json({ success: true, accounts: r.rows.map(a => ({ ...a, connected: require('../../bot/WhatsAppManager').isReady(a.id) })) }); } catch (e) { res.status(500).json({ success: false, error: e.message }); } }
+  async accounts(req, res) { try { const userId = currentUserId(req); const sql = isAdmin(req) ? 'SELECT id,name,phone_number,status,health_status,connection_type,last_activity_at FROM accounts ORDER BY created_at DESC' : 'SELECT id,name,phone_number,status,health_status,connection_type,last_activity_at FROM accounts WHERE user_id=$1 ORDER BY created_at DESC'; const r = await getPool().query(sql, isAdmin(req) ? [] : [userId]); res.json({ success: true, accounts: r.rows.map(a => ({ ...a, connected: require('../../bot/WhatsAppManager').isReady(a.id) })) }); } catch (e) { res.status(500).json({ success: false, error: e.message }); } }
   async start(req, res) { try { res.json({ success: true, job: await LinkImportService.start(req.body) }); } catch (e) { res.status(400).json({ success: false, error: e.message }); } }
   async jobs(req, res) { try { res.json({ success: true, jobs: await LinkImportService.listJobs(req.query.accountId) }); } catch (e) { res.status(500).json({ success: false, error: e.message }); } }
   async job(req, res) { try { const details = await LinkImportService.getJobDetails(req.query.accountId, req.params.jobId); res.json({ success: !!details, ...(details || { job: null }) }); } catch (e) { res.status(500).json({ success: false, error: e.message }); } }

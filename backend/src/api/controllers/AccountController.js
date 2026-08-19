@@ -268,7 +268,9 @@ class AccountController {
 
     async getSummary(req, res) {
         try {
-            const summary = await AccountRoleEngine.getSummary();
+            const isAdmin = ['admin', 'super_admin', 'superadmin', 'owner'].includes(req.user?.role);
+            const userId = isAdmin ? null : (req.user?.id || req.user?.userId);
+            const summary = await AccountRoleEngine.getSummary(userId);
             return res.json({ success: true, summary });
         } catch (error) {
             return res.status(500).json({ success: false, error: 'Internal Server Error' });

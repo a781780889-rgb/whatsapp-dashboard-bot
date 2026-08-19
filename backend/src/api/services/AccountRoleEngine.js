@@ -423,7 +423,7 @@ class AccountRoleEngine {
     }
 
     // ── ملخص أدوار جميع الحسابات ─────────────────────────────────────────────
-    async getSummary() {
+    async getSummary(userId = null) {
         const rows = await SystemDB.all(`
             SELECT
                 COUNT(*)                                       AS total,
@@ -435,7 +435,8 @@ class AccountRoleEngine {
                 COUNT(*) FILTER (WHERE role = 'monitor')      AS monitors,
                 COUNT(*) FILTER (WHERE role = 'stopped')      AS stopped
             FROM accounts
-        `).catch(() => [{}]);
+            WHERE ($1::uuid IS NULL OR user_id = $1)
+        `, [userId]).catch(() => [{}]);
         return rows[0] || {};
     }
 }

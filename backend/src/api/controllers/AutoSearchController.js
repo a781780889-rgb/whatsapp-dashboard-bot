@@ -1,10 +1,11 @@
 'use strict';
 const AutoSearchService = require('../services/AutoSearchService');
 const SystemDB = require('../../database/SystemDB');
+const { currentUserId, isAdmin } = require('../middleware/accountOwnership');
 const WhatsAppManager = require('../../bot/WhatsAppManager');
 class AutoSearchController {
   async dashboard(req,res){try{res.json({success:true,...await AutoSearchService.getDashboard(req.query.accountId)})}catch(e){res.status(500).json({success:false,error:e.message})}}
-  async accounts(req,res){try{const rows=await SystemDB.all('SELECT id,name,phone_number,status,health_status,last_activity_at FROM accounts ORDER BY created_at DESC');res.json({success:true,accounts:rows.map(a=>({...a,connected:WhatsAppManager.isReady(a.id)}))})}catch(e){res.status(500).json({success:false,error:e.message})}}
+  async accounts(req,res){try{const userId = currentUserId(req); const sql = isAdmin(req) ? 'SELECT id,name,phone_number,status,health_status,last_activity_at FROM accounts ORDER BY created_at DESC' : 'SELECT id,name,phone_number,status,health_status,last_activity_at FROM accounts WHERE user_id=$1 ORDER BY created_at DESC'; const rows=await SystemDB.all(sql, isAdmin(req) ? [] : [userId]);res.json({success:true,accounts:rows.map(a=>({...a,connected:WhatsAppManager.isReady(a.id)}))})}catch(e){res.status(500).json({success:false,error:e.message})}}
   async start(req,res){try{res.json({success:true,job:await AutoSearchService.start(req.body.accountId,req.body.accountIds,req.body.settings)})}catch(e){res.status(400).json({success:false,error:e.message})}}
   async control(req,res){try{res.json({success:true,...await AutoSearchService.control(req.body.accountId,req.params.action)})}catch(e){res.status(400).json({success:false,error:e.message})}}
   async scanNow(req,res){try{res.json({success:true,...await AutoSearchService.scanNow(req.body.accountId)})}catch(e){res.status(400).json({success:false,error:e.message})}}

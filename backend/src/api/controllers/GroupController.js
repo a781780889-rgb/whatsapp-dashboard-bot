@@ -78,7 +78,7 @@ function withTimeout(promise, ms, label = 'TIMEOUT') {
 }
 
 async function listUserAccounts(req) {
-    const isAdmin = req.user?.role === 'admin';
+    const isAdmin = ['admin', 'super_admin', 'superadmin', 'owner'].includes(req.user?.role);
     const userId  = req.user?.id || req.user?.userId;
     if (isAdmin) {
         return DatabaseManager.systemDB.all(
@@ -87,7 +87,7 @@ async function listUserAccounts(req) {
     }
     return DatabaseManager.systemDB.all(
         `SELECT id, name, phone_number, status FROM accounts
-         WHERE user_id = $1 OR user_id IS NULL ORDER BY created_at DESC`,
+         WHERE user_id = $1 ORDER BY created_at DESC`,
         [userId]
     );
 }
