@@ -108,13 +108,14 @@ router.get('/admin/accounts/:id/qr-debug', auth, role('admin'), async (req, res)
 const AccountController = require('./controllers/AccountController');
 const { requireAccountOwnership, requireRequestedAccountOwnership } = require('./middleware/accountOwnership');
 
+router.post('/accounts',                   auth, subscriptionCheck, accountLimitCheck, AccountController.createAccount.bind(AccountController));
+router.get('/accounts',                    auth, subscriptionCheck, listAccountsLimiter, AccountController.listAccounts.bind(AccountController));
+// Static route must be registered before the dynamic account ownership guard.
+router.get('/accounts/summary',            auth, subscriptionCheck, AccountController.getSummary.bind(AccountController));
+
 // Tenant boundary: every /accounts/:accountId/* endpoint must verify ownership
 // before any controller can open the per-account schema or execute an action.
 router.use('/accounts/:accountId', auth, requireAccountOwnership);
-
-router.post('/accounts',                   auth, subscriptionCheck, accountLimitCheck, AccountController.createAccount.bind(AccountController));
-router.get('/accounts',                    auth, subscriptionCheck, listAccountsLimiter, AccountController.listAccounts.bind(AccountController));
-router.get('/accounts/summary',            auth, subscriptionCheck, AccountController.getSummary.bind(AccountController));
 router.get('/accounts/:id',                auth, subscriptionCheck, AccountController.getAccountDetails.bind(AccountController));
 router.get('/accounts/:id/stats',          auth, subscriptionCheck, AccountController.getAccountStats.bind(AccountController));
 router.get('/accounts/:id/logs',           auth, subscriptionCheck, AccountController.getLogs.bind(AccountController));
