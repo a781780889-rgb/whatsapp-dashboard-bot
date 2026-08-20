@@ -236,6 +236,42 @@ class GroupJoinerService {
         }
     }
 
+    _normaliseJid(value) {
+        return String(value || '').trim().replace(/:\d+(?=@)/, '');
+    }
+
+    async _confirmMembership(sock, groupId) {
+        const selfJid = this._normaliseJid(sock?.user?.id || sock?.user?.jid);
+        if (!selfJid || !groupId || typeof sock?.groupMetadata !== 'function') {
+            return { confirmed: false, reason: 'لا تتوفر بيانات العضوية من جلسة واتساب' };
+        }
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+                const metadata = await sock.groupMetadata(groupId);
+                const member = (metadata?.participants || []).some((participant) => {
+                    return this._normaliseJid(participant?.id) === selfJid;
+                });
+                if (member) return { confirmed: true };
+            } catch (error) {
+                if (attempt === 3) return { confirmed: false, reason: error?.message || 'تعذر قراءة أعضاء المجموعة' };
+            }
+            if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+        return { confirmed: false, reason: 'لم يؤكد واتساب وجود الحساب داخل المجموعة بعد الانضمام' };
+    }
+
+    async _confirmInviteMembership(sock, code) {
+        if (typeof sock?.groupGetInviteInfo !== 'function') {
+            return { confirmed: false, reason: 'لا يمكن الحصول على معرف المجموعة للتحقق من العضوية' };
+        }
+        try {
+            const invite = await sock.groupGetInviteInfo(code);
+            return this._confirmMembership(sock, invite?.id || invite?.jid);
+        } catch (error) {
+            return { confirmed: false, reason: error?.message || 'تعذر التحقق من العضوية الحالية' };
+        }
+    }
+
     // ── [البند 1] تنفيذ الانضمام الفعلي فقط — منفصل عن منطق الحماية أعلاه
     //    لإبقاء كل مسار (محمي / غير محمي fallback) يستدعي نفس الكود الفعلي ───
     async _doJoin(accountId, link) {
@@ -247,12 +283,21 @@ class GroupJoinerService {
             if (!code) return { success: false, status: 'invalid_link', retryable: false, error: 'رابط دعوة واتساب غير صالح' };
             const groupId = await sock.groupAcceptInvite(code);
             if (!groupId) return { success: false, status: 'retry', retryable: true, error: 'لم تصل استجابة تأكيد من واتساب' };
+            const membership = await this._confirmMembership(sock, groupId);
+            if (!membership.confirmed) {
+                console.warn(`[GroupJoiner] membership not confirmed for ${groupId} via account ${accountId}: ${membership.reason}`);
+                return { success: false, status: 'retry', retryable: true, confirmed: false, groupId, error: membership.reason };
+            }
             console.log(`[GroupJoiner] ✅ WhatsApp confirmed join ${groupId} via account ${accountId}`);
             return { success: true, status: 'joined', confirmed: true, groupId };
         } catch (err) {
             const message = String(err?.message || err || 'خطأ غير معروف');
             const lower = message.toLowerCase();
-            if (/already|participant|member|in-group|409/.test(lower)) return { success: true, status: 'already_joined', confirmed: true, error: 'الحساب منضم مسبقاً' };
+            if (/already|participant|member|in-group|409/.test(lower)) {
+                const membership = await this._confirmInviteMembership(sock, code);
+                if (membership.confirmed) return { success: true, status: 'already_joined', confirmed: true, error: 'الحساب منضم مسبقاً' };
+                return { success: false, status: 'retry', retryable: true, confirmed: false, error: membership.reason };
+            }
             if (/pending|approval|admin.?approv|request.?sent|等待/.test(lower)) return { success: false, status: 'pending_approval', retryable: false, error: 'بانتظار موافقة مشرف المجموعة' };
             if (/not-authorized|unauthorized|forbidden|invite.*(expired|invalid)|bad-request|not-found|404/.test(lower)) return { success: false, status: 'invalid_link', retryable: false, error: this._friendlyError(message) };
             if (/connection|connect|timeout|timed out|network|socket|temporar|503|500/.test(lower)) return { success: false, status: 'retry', retryable: true, error: 'خطأ مؤقت في الاتصال بواتساب', rawError: message };
