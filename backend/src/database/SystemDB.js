@@ -404,37 +404,6 @@ const SystemDB = {
         await p.query(`ALTER TABLE kw_alerts ADD COLUMN IF NOT EXISTS notification_id UUID`).catch(() => {});
         await p.query(`CREATE UNIQUE INDEX IF NOT EXISTS ux_kw_alerts_event ON kw_alerts(account_id, message_id, keyword_id) WHERE message_id IS NOT NULL`).catch(() => {});
 
-        // ── WhatsApp Link Import / Join Tasks (additive, preserves existing data) ──
-        await p.query(`
-            CREATE TABLE IF NOT EXISTS imported_links (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL,
-                url TEXT NOT NULL, source_filename TEXT, last_status VARCHAR(30), last_error TEXT,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                UNIQUE(user_id, url)
-            )
-        `);
-        await p.query(`CREATE INDEX IF NOT EXISTS idx_imported_links_user ON imported_links(user_id, created_at DESC)`).catch(() => {});
-        await p.query(`
-            CREATE TABLE IF NOT EXISTS link_import_tasks (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL,
-                status VARCHAR(20) NOT NULL DEFAULT 'pending', total_operations INT NOT NULL DEFAULT 0,
-                min_delay_seconds INT NOT NULL DEFAULT 60, max_delay_seconds INT NOT NULL DEFAULT 180,
-                max_retries INT NOT NULL DEFAULT 2, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), completed_at TIMESTAMPTZ
-            )
-        `);
-        await p.query(`CREATE INDEX IF NOT EXISTS idx_link_import_tasks_user ON link_import_tasks(user_id, created_at DESC)`).catch(() => {});
-        await p.query(`
-            CREATE TABLE IF NOT EXISTS link_import_operations (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(), task_id UUID NOT NULL REFERENCES link_import_tasks(id) ON DELETE CASCADE,
-                user_id UUID NOT NULL, account_id UUID NOT NULL, link_id UUID NOT NULL REFERENCES imported_links(id) ON DELETE CASCADE,
-                status VARCHAR(20) NOT NULL DEFAULT 'pending', attempt_count INT NOT NULL DEFAULT 0,
-                started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, last_error TEXT, next_retry_at TIMESTAMPTZ,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(task_id, account_id, link_id)
-            )
-        `);
-        await p.query(`CREATE INDEX IF NOT EXISTS idx_link_import_ops_ready ON link_import_operations(task_id,status,next_retry_at)`).catch(() => {});
-
         // ── Telegram System Tables ────────────────────────────────────────
         const TelegramMigrations = require('./TelegramMigrations');
         await TelegramMigrations.run();

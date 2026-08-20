@@ -339,9 +339,6 @@ async function bootstrap() {
         logger.info('[Phase4] QueueManager started. Queues: wa-campaigns, wa-sync, wa-notifications');
         const KeywordMonitoringService = require('./src/api/services/KeywordMonitoringService');
         await KeywordMonitoringService.startWorker();
-        const LinkImportService = require('./src/api/services/LinkImportService');
-        LinkImportService.startWorker();
-        logger.info('[LinkImportWorker] Durable Word link import worker started.');
         logger.info('[KeywordWorker] Durable keyword processing worker started.');
         const AIAutomationService = require('./src/api/services/AIAutomationService');
         await AIAutomationService.registerCoreEvents();
@@ -382,7 +379,6 @@ function setupGracefulShutdown() {
             await JobScheduler.stop();
             // [FIX-20] إيقاف QueueManager قبل RedisManager
             try { require('./src/api/services/KeywordMonitoringService').stopWorker(); } catch {}
-            try { require('./src/api/services/LinkImportService').stopWorker(); } catch {}
             try { require('./src/api/services/TelegramAuthService').stopCleanup(); } catch {}
             try { require('./src/api/services/AIAutomationService').stopWorker(); } catch {}
             await QueueManager.stop();

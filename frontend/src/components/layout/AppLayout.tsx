@@ -6,7 +6,7 @@ import { usePageMotion } from '@/hooks/usePageMotion';
 import {
   LayoutDashboard, Users, Library, Calendar, Megaphone,
   SearchCheck, Brain, Activity,
-  BarChart3, CreditCard, Monitor, MessageCircle, Link2,
+  BarChart3, CreditCard, Monitor, MessageCircle,
 } from 'lucide-react';
 
 interface AppLayoutProps {
@@ -40,7 +40,6 @@ export function AppLayout({
       { id: 'campaigns',  label: 'الحملات',              section: 'النشر',  icon: Megaphone,       to: '/campaigns' },
       { id: 'groups',     label: 'المجموعات',            section: 'النشر',  icon: Users,           to: '/groups' },
       { id: 'keywords',   label: 'الكلمات المفتاحية',    section: 'الروابط', icon: SearchCheck,     to: '/keywords' },
-      { id: 'link-import',label: 'استيراد الروابط',      section: 'الروابط', icon: Link2,           to: '/link-import' },
       { id: 'ai',         label: 'مركز الذكاء والأتمتة', section: 'الذكاء الاصطناعي', icon: Brain, to: '/ai-automation' },
       { id: 'diagnostics',label: 'لوحة التشخيص',         section: 'التشخيص', icon: Activity,        to: '/diagnostics' },
     ];
