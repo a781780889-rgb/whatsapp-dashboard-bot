@@ -293,10 +293,12 @@ class GroupJoinerService {
     //    لإبقاء كل مسار (محمي / غير محمي fallback) يستدعي نفس الكود الفعلي ───
     async _doJoin(accountId, link) {
         const rawLink = String(link || '');
+        let sock = null;
+        let code = null;
         try {
-            const sock = WhatsAppManager.getSession(accountId);
+            sock = WhatsAppManager.getSession(accountId);
             if (!sock || !WhatsAppManager.isReady(accountId)) return { success: false, status: 'account_offline', retryable: true, error: 'جلسة الحساب غير متصلة أو غير جاهزة' };
-            const code = this._extractInviteCode(rawLink);
+            code = this._extractInviteCode(rawLink);
             if (!code) return { success: false, status: 'invalid_link', retryable: false, error: 'رابط دعوة واتساب غير صالح' };
             const groupId = await sock.groupAcceptInvite(code);
             if (!groupId) return { success: false, status: 'retry', retryable: true, error: 'لم تصل استجابة تأكيد من واتساب' };
