@@ -4,6 +4,7 @@
  */
 
 const TelegramService = require('../services/TelegramService');
+const LinkImportService = require('../services/LinkImportService');
 const { queryAll, queryOne, query } = require('../../lib/postgres');
 const { v4: uuidv4 } = require('uuid');
 const ADMIN_ROLES = new Set(['super_admin', 'superadmin', 'admin', 'owner']);
@@ -490,6 +491,37 @@ const TelegramController = {
         } catch (err) {
             return res.status(500).json({ success: false, error: err.message });
         }
+    },
+
+    // ── استيراد روابط Word وإنشاء مهام Account × Link ────────────────────────
+    async importLinksFromWord(req, res) {
+        try {
+            const result = await LinkImportService.importDocx({
+                userId: currentUserId(req), filename: req.body?.filename, contentBase64: req.body?.contentBase64,
+            });
+            return res.json({ success: true, summary: result });
+        } catch (err) {
+            return res.status(400).json({ success: false, error: err.message });
+        }
+    },
+    async createLinkImportTask(req, res) {
+        try {
+            const result = await LinkImportService.createTask({ userId: currentUserId(req), linkIds: req.body?.linkIds, accountIds: req.body?.accountIds, settings: req.body?.settings });
+            return res.json({ success: true, ...result });
+        } catch (err) { return res.status(400).json({ success: false, error: err.message }); }
+    },
+    async listImportedLinks(req, res) {
+        const links = await queryAll(`SELECT * FROM imported_links WHERE user_id=$1 ORDER BY created_at DESC`, [currentUserId(req)]);
+        return res.json({ success: true, links });
+    },
+    async getLinkImportDashboard(req, res) {
+        const dashboard = await LinkImportService.dashboard(currentUserId(req), req.params.taskId);
+        if (!dashboard) return res.status(404).json({ success: false, error: 'المهمة غير موجودة' });
+        return res.json({ success: true, ...dashboard });
+    },
+    async controlLinkImportTask(req, res) {
+        try { return res.json(await LinkImportService.updateTaskStatus(req.params.taskId, currentUserId(req), req.body?.status)); }
+        catch (err) { return res.status(400).json({ success: false, error: err.message }); }
     },
 
     // ── حالة الـ workers ──────────────────────────────────────────────────────

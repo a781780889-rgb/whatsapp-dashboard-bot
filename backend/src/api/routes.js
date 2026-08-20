@@ -456,7 +456,12 @@ router.get   ("/telegram/links/export",                auth, TelegramController.
 router.post  ("/telegram/links/bulk-delete",           auth, TelegramController.bulkDeleteLinks.bind(TelegramController));
 router.post  ("/telegram/links/bulk-copy",             auth, TelegramController.bulkCopyLinks.bind(TelegramController));
 router.patch ("/telegram/links/:id",                   auth, TelegramController.updateLinkStatus.bind(TelegramController));
-router.delete("/telegram/links/:id",                   auth, TelegramController.deleteLink.bind(TelegramController));
+router.delete("/telegram/links/:id",                auth, TelegramController.deleteLink.bind(TelegramController));
+router.get   ("/telegram/imported-links",             auth, TelegramController.listImportedLinks.bind(TelegramController));
+router.post  ("/telegram/links/import-word",          auth, TelegramController.importLinksFromWord.bind(TelegramController));
+router.post  ("/telegram/links/import-task",          auth, TelegramController.createLinkImportTask.bind(TelegramController));
+router.get   ("/telegram/links/import-task/:taskId",  auth, TelegramController.getLinkImportDashboard.bind(TelegramController));
+router.patch ("/telegram/links/import-task/:taskId",  auth, TelegramController.controlLinkImportTask.bind(TelegramController));
 
 // ── استقبال رسائل خارجية (بدون مصادقة JWT — تأمين بـ secret) ──────────────
 // يُستخدم من سكريبت Python (telethon/pyrogram) أو أي Telegram bot
