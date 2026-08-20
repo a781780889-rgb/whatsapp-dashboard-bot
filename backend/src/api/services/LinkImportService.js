@@ -90,8 +90,8 @@ class LinkImportService {
   _rowToJob(row){return {id:row.id,fileId:row.file_id,accountIds:Array.isArray(row.selected_account_ids)?row.selected_account_ids:JSON.parse(row.selected_account_ids||'[]'),status:row.status,total:Number(row.total||0),processed:Number(row.processed||0),successful:Number(row.successful||0),failed:Number(row.failed||0),skipped:Number(row.skipped||0),minDelay:Number(row.min_delay||30),maxDelay:Number(row.max_delay||30),maxAttempts:Number(row.max_attempts||3),distributionMode:row.distribution_mode||'round_robin',executionMode:row.execution_mode||'full_file_per_account',retryCount:Number(row.retry_count||0),startedAt:row.started_at,pausedAt:row.paused_at,cancelledAt:row.cancelled_at,lastError:row.last_error||null,nextRunAt:row.next_run_at||null};}
   async _broadcast(db,jobId){ try { const [j,a,i,e]=await Promise.all([db.query('SELECT j.*,f.file_name FROM link_import_jobs j JOIN link_import_files f ON f.id=j.file_id WHERE j.id=$1',[jobId]),db.query('SELECT * FROM link_import_account_state WHERE job_id=$1 ORDER BY updated_at DESC',[jobId]),db.query("SELECT * FROM link_import_items WHERE file_id=(SELECT file_id FROM link_import_jobs WHERE id=$1) AND status IN ('processing','retry','joined','already_joined','pending_approval','invalid_link','expired_link','account_error','account_restricted','rate_limited','temporary_error','network_error','join_failed','failed') ORDER BY COALESCE(processed_at,started_at,updated_at) DESC NULLS LAST LIMIT 100",[jobId]),db.query('SELECT * FROM link_import_events WHERE job_id=$1 ORDER BY created_at DESC LIMIT 100',[jobId])]); const row=j.rows[0]; if(!row)return; SocketBridge.to(`link-import:${jobId}`).emit('link_import:update',{job:this._rowToJob(row),accounts:a.rows,items:i.rows,events:e.rows,serverTime:new Date().toISOString()}); } catch(error){ console.warn(`[LinkImportWorker] broadcast failed: ${error.message}`); } }
   async _event(db,jobId,type,accountId,itemId,message,details={}){await db.query('INSERT INTO link_import_events(job_id,account_id,item_id,event_type,message,details) VALUES($1,$2,$3,$4,$5,$6)',[jobId,accountId,itemId,type,message,JSON.stringify(details)]).catch(()=>{}); await this._broadcast(db,jobId);}
-  async _tickAccount(accountId){
-    const db=await DatabaseManager.getAccountDB(accountId);
+  async _tickAccount(accountId, storageAccountId = accountId){
+    const db=await DatabaseManager.getAccountDB(storageAccountId);
     const jobsRows=await db.query("SELECT * FROM link_import_jobs WHERE status IN ('queued','running','waiting','reconnecting','paused_system','retrying') AND (next_run_at IS NULL OR next_run_at<=NOW()) ORDER BY created_at LIMIT 10");
     for(const row of jobsRows.rows){
       const selected=Array.isArray(row.selected_account_ids)?row.selected_account_ids:JSON.parse(row.selected_account_ids||'[]');
@@ -115,7 +115,23 @@ class LinkImportService {
     }
   }
   async startWorker(){if(this._workerTimer)return; const accounts=await getPool().query('SELECT id FROM accounts').catch(()=>({rows:[]})); for(const account of accounts.rows){const db=await DatabaseManager.getAccountDB(account.id);await db.query("UPDATE link_import_jobs SET status='reconnecting',next_run_at=NOW(),updated_at=NOW() WHERE status IN ('running','waiting','reconnecting','paused_system')").catch(()=>{});await db.query("UPDATE link_import_items SET status='pending',started_at=NULL WHERE status='processing' AND processed_at IS NULL").catch(()=>{});} this._workerTimer=setInterval(()=>this._runWorker().catch(error=>console.error('[LinkImportWorker]',error.message)),1000); await this._runWorker();}
-  async _runWorker(){if(this._workerBusy)return;this._workerBusy=true;try{const accounts=await getPool().query('SELECT id FROM accounts').catch(()=>({rows:[]}));for(const account of accounts.rows)await this._tickAccount(account.id);}finally{this._workerBusy=false;}}
+  async _runWorker(){
+    if(this._workerBusy)return;
+    this._workerBusy=true;
+    try {
+      const accounts=await getPool().query('SELECT id FROM accounts').catch(()=>({rows:[]}));
+      for(const storageAccount of accounts.rows){
+        const storageDb=await DatabaseManager.getAccountDB(storageAccount.id);
+        const activeJobs=await storageDb.query("SELECT selected_account_ids FROM link_import_jobs WHERE status IN ('queued','running','waiting','reconnecting','paused_system','retrying')").catch(()=>({rows:[]}));
+        const selectedIds=new Set();
+        for(const row of activeJobs.rows){
+          const ids=Array.isArray(row.selected_account_ids)?row.selected_account_ids:JSON.parse(row.selected_account_ids||'[]');
+          ids.forEach(id=>selectedIds.add(String(id)));
+        }
+        for(const accountId of selectedIds) await this._tickAccount(accountId, storageAccount.id);
+      }
+    } finally { this._workerBusy=false; }
+  }
   stopWorker(){if(this._workerTimer){clearInterval(this._workerTimer);this._workerTimer=null;}}
   async getJobDetails(accountId,jobId){ const db=await DatabaseManager.getAccountDB(accountId); const r=await db.query('SELECT j.*,f.file_name FROM link_import_jobs j JOIN link_import_files f ON f.id=j.file_id WHERE j.id=$1',[jobId]); if(!r.rows[0])return null; await this._broadcast(db,jobId); const [a,i,e]=await Promise.all([db.query('SELECT * FROM link_import_account_state WHERE job_id=$1 ORDER BY updated_at DESC',[jobId]),db.query("SELECT * FROM link_import_items WHERE file_id=$1 ORDER BY id LIMIT 500",[r.rows[0].file_id]),db.query('SELECT * FROM link_import_events WHERE job_id=$1 ORDER BY created_at DESC LIMIT 100',[jobId])]); return {job:this._rowToJob(r.rows[0]),accounts:a.rows,items:i.rows,events:e.rows}; }
   async listJobs(accountId){const db=await DatabaseManager.getAccountDB(accountId);const r=await db.query("SELECT * FROM link_import_jobs WHERE status NOT IN ('completed','stopped') ORDER BY created_at DESC LIMIT 20");return r.rows.map(row=>this._rowToJob(row));}
