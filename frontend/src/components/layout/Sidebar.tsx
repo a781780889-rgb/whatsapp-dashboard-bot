@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Users, Library, Calendar,
   Megaphone, LogOut, ChevronRight,
   UsersRound, BarChart3, Crown, Brain, Activity,
-  MessageCircle, CreditCard, Monitor, SearchCheck
+  MessageCircle, CreditCard, Monitor, SearchCheck, Link2
 } from 'lucide-react';
 import { cn } from '@/utils/cn';
 
@@ -40,6 +40,7 @@ export function Sidebar({ isCollapsed, setIsCollapsed, currentUser, onLogout }: 
       section: 'الروابط',
       items: [
         { to: '/keywords',      icon: SearchCheck,  label: 'الكلمات المفتاحية' },
+        { to: '/link-import',   icon: Link2,         label: 'استيراد الروابط' },
       ]
     },
 
