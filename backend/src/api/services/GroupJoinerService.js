@@ -241,15 +241,32 @@ class GroupJoinerService {
     }
 
     async _confirmMembership(sock, groupId) {
-        const selfJid = this._normaliseJid(sock?.user?.id || sock?.user?.jid);
-        if (!selfJid || !groupId || typeof sock?.groupMetadata !== 'function') {
+        if (!groupId || typeof sock?.groupMetadata !== 'function') {
             return { confirmed: false, reason: 'لا تتوفر بيانات العضوية من جلسة واتساب' };
         }
+        const selfIds = new Set();
+        for (const identity of [
+            sock?.user?.id,
+            sock?.user?.lid,
+            sock?.user?.jid,
+            sock?.authState?.creds?.me?.id,
+            sock?.authState?.creds?.me?.lid,
+        ]) {
+            const normalized = this._normaliseJid(identity);
+            if (normalized) selfIds.add(normalized);
+        }
+        const phone = this._normaliseJid(sock?.user?.id || sock?.authState?.creds?.me?.id)
+            .split('@')[0] || null;
+        if (phone) selfIds.add(`${phone}@s.whatsapp.net`);
+        if (!selfIds.size) return { confirmed: false, reason: 'لا تتوفر هوية الحساب من جلسة واتساب' };
+
         for (let attempt = 1; attempt <= 3; attempt++) {
             try {
                 const metadata = await sock.groupMetadata(groupId);
                 const member = (metadata?.participants || []).some((participant) => {
-                    return this._normaliseJid(participant?.id) === selfJid;
+                    const participantId = this._normaliseJid(participant?.id || participant?.jid);
+                    const participantPhone = this._normaliseJid(participant?.phoneNumber).split('@')[0];
+                    return selfIds.has(participantId) || (phone && participantPhone === phone);
                 });
                 if (member) return { confirmed: true };
             } catch (error) {
