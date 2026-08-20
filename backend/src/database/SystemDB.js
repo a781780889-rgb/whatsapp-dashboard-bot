@@ -655,6 +655,12 @@ Object.assign(SystemDB, {
             `UPDATE refresh_tokens SET used = TRUE WHERE user_id = $1`, [userId]
         ).catch(() => {});
     },
+
+    async resetDailyMessageCounters() {
+        return await this.run(
+            `UPDATE accounts SET messages_sent_today = 0 WHERE messages_sent_today <> 0`
+        );
+    },
 });
 
 // ── deleteAllSessionData ────────────────────────────────────────────

@@ -44,7 +44,9 @@ class DatabaseBackupJob {
             // those services handle backups automatically. We just log a confirmation.
             const isManaged = dbUrl.includes('neon.tech')
                            || dbUrl.includes('supabase.co')
-                           || dbUrl.includes('railway.app');
+                           || dbUrl.includes('railway.app')
+                           || dbUrl.includes('railway.internal')
+                           || dbUrl.includes('rlwy.net');
 
             if (isManaged) {
                 console.log('[Backup] ✅ Managed PostgreSQL detected — backup handled by provider automatically.');
