@@ -268,7 +268,13 @@ class GroupJoinerService {
                     const participantPhone = this._normaliseJid(participant?.phoneNumber).split('@')[0];
                     return selfIds.has(participantId) || (phone && participantPhone === phone);
                 });
-                if (member) return { confirmed: true };
+                if (!member) continue;
+                if (typeof sock.groupFetchAllParticipating === 'function') {
+                    const participating = await sock.groupFetchAllParticipating();
+                    const liveGroup = participating?.[groupId] || participating?.[this._normaliseJid(groupId)];
+                    if (!liveGroup) continue;
+                }
+                return { confirmed: true, selfJid: [...selfIds][0], groupId };
             } catch (error) {
                 if (attempt === 3) return { confirmed: false, reason: error?.message || 'تعذر قراءة أعضاء المجموعة' };
             }
@@ -307,14 +313,14 @@ class GroupJoinerService {
                 console.warn(`[GroupJoiner] membership not confirmed for ${groupId} via account ${accountId}: ${membership.reason}`);
                 return { success: false, status: 'retry', retryable: true, confirmed: false, groupId, error: membership.reason };
             }
-            console.log(`[GroupJoiner] ✅ WhatsApp confirmed join ${groupId} via account ${accountId}`);
-            return { success: true, status: 'joined', confirmed: true, groupId };
+            console.log(`[GroupJoiner] ✅ WhatsApp confirmed join ${groupId} via account ${accountId} as ${membership.selfJid || 'unknown-jid'}`);
+            return { success: true, status: 'joined', confirmed: true, groupId, selfJid: membership.selfJid || null };
         } catch (err) {
             const message = String(err?.message || err || 'خطأ غير معروف');
             const lower = message.toLowerCase();
             if (/already|participant|member|in-group|409/.test(lower)) {
                 const membership = await this._confirmInviteMembership(sock, code);
-                if (membership.confirmed) return { success: true, status: 'already_joined', confirmed: true, error: 'الحساب منضم مسبقاً' };
+                if (membership.confirmed) return { success: true, status: 'already_joined', confirmed: true, groupId: membership.groupId || null, selfJid: membership.selfJid || null, error: 'الحساب منضم مسبقاً' };
                 return { success: false, status: 'retry', retryable: true, confirmed: false, error: membership.reason };
             }
             if (/pending|approval|admin.?approv|request.?sent|等待/.test(lower)) return { success: false, status: 'pending_approval', retryable: false, error: 'بانتظار موافقة مشرف المجموعة' };
