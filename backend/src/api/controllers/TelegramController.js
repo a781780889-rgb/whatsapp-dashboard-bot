@@ -4,6 +4,7 @@
  */
 
 const TelegramService = require('../services/TelegramService');
+const LinkImportService = require('../services/LinkImportService');
 const { queryAll, queryOne, query } = require('../../lib/postgres');
 const { v4: uuidv4 } = require('uuid');
 const ADMIN_ROLES = new Set(['super_admin', 'superadmin', 'admin', 'owner']);
@@ -490,6 +491,60 @@ const TelegramController = {
         } catch (err) {
             return res.status(500).json({ success: false, error: err.message });
         }
+    },
+
+    // ── استيراد روابط Word ومهام Account × Link ─────────────────────────────
+    async importWordLinks(req, res) {
+        try {
+            const summary = await LinkImportService.importDocx({
+                userId: currentUserId(req),
+                filename: req.body?.filename,
+                contentBase64: req.body?.contentBase64,
+            });
+            return res.json({ success: true, summary });
+        } catch (error) {
+            return res.status(400).json({ success: false, error: error.message });
+        }
+    },
+    async listImportedLinks(req, res) {
+        try { return res.json({ success: true, links: await LinkImportService.listLinks(currentUserId(req), req.query) }); }
+        catch (error) { return res.status(500).json({ success: false, error: error.message }); }
+    },
+    async createImportTask(req, res) {
+        try {
+            const result = await LinkImportService.createTask({ userId: currentUserId(req), linkIds: req.body?.linkIds, accountIds: req.body?.accountIds, settings: req.body?.settings });
+            return res.status(201).json({ success: true, ...result });
+        } catch (error) { return res.status(400).json({ success: false, error: error.message }); }
+    },
+    async getImportDashboard(req, res) {
+        try {
+            const dashboard = await LinkImportService.taskDashboard(currentUserId(req), req.params.taskId);
+            if (!dashboard) return res.status(404).json({ success: false, error: 'المهمة غير موجودة' });
+            return res.json({ success: true, ...dashboard });
+        } catch (error) { return res.status(500).json({ success: false, error: error.message }); }
+    },
+    async controlImportTask(req, res) {
+        try { return res.json({ success: true, task: await LinkImportService.updateTaskStatus(currentUserId(req), req.params.taskId, req.body?.status) }); }
+        catch (error) { return res.status(400).json({ success: false, error: error.message }); }
+    },
+    async retryImportOperation(req, res) {
+        try {
+            const operation = await queryOne(`SELECT o.id, o.account_id, o.link_id, o.task_id, o.user_id FROM link_import_operations o WHERE o.id=$1 AND o.user_id=$2`, [req.params.operationId, currentUserId(req)]);
+            if (!operation) return res.status(404).json({ success: false, error: 'العملية غير موجودة' });
+            await query(`UPDATE link_import_operations SET status='retry',last_error=NULL,next_retry_at=NULL,updated_at=NOW() WHERE id=$1`, [operation.id]);
+            const QueueManager = require('../../lib/QueueManager');
+            await QueueManager.enqueueLinkImportOperation({ operationId: operation.id, accountId: operation.account_id, linkId: operation.link_id }, { attempts: 1 });
+            return res.json({ success: true });
+        } catch (error) { return res.status(400).json({ success: false, error: error.message }); }
+    },
+    async exportImportedLinks(req, res) {
+        try {
+            const links = await LinkImportService.listLinks(currentUserId(req), req.query);
+            const csv = '\\uFEFF' + ['الرابط,الحالة,آخر خطأ,تاريخ الإضافة', ...links.map(l => [l.canonical_url, l.last_status || '', l.last_error || '', l.created_at].map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))].join('\\n');
+            res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+            res.setHeader('Content-Disposition', 'attachment; filename="whatsapp-link-import.csv"');
+            return res.send(csv);
+        } catch (error) { return res.status(500).json({ success: false, error: error.message }); }
     },
 
     // ── حالة الـ workers ──────────────────────────────────────────────────────

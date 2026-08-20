@@ -32,6 +32,7 @@ const QUEUES = {
     CAMPAIGNS:     'wa-campaigns',
     SYNC:          'wa-sync',
     NOTIFICATIONS: 'wa-notifications',
+    LINK_IMPORTS:   'wa-link-imports',
 };
 
 // ── Default Job Options ───────────────────────────────────────────────────────
@@ -115,6 +116,19 @@ class QueueManager {
             {
                 connection:  getBullMQConnection(),
                 concurrency: 10,
+            }
+        );
+
+        // Link imports are isolated from campaigns and sync jobs. One active job
+        // per worker prevents conflicting operations in the same account stream;
+        // the service-level lock additionally protects each account explicitly.
+        this._workers[QUEUES.LINK_IMPORTS] = new Worker(
+            QUEUES.LINK_IMPORTS,
+            (job) => this._dispatch(QUEUES.LINK_IMPORTS, job),
+            {
+                connection:  getBullMQConnection(),
+                concurrency: 1,
+                limiter:     { max: 1, duration: 1000 },
             }
         );
 
@@ -297,6 +311,18 @@ class QueueManager {
         const queue = this._getQueue(QUEUES.NOTIFICATIONS);
         return queue.add('send_notification', notification, {
             priority: 1, // أولوية عالية للإشعارات
+        });
+    }
+
+    async enqueueLinkImportOperation(data, options = {}) {
+        const queue = this._getQueue(QUEUES.LINK_IMPORTS);
+        return queue.add('process_link_import_operation', data, {
+            delay: options.delay || 0,
+            attempts: options.attempts || 1,
+            backoff: options.backoff || { type: 'exponential', delay: 15000 },
+            jobId: options.jobId || `link-import:${data.operationId}`,
+            removeOnComplete: { count: 500, age: 86400 },
+            removeOnFail: { count: 500, age: 604800 },
         });
     }
 

@@ -407,6 +407,8 @@ const SystemDB = {
         // ── Telegram System Tables ────────────────────────────────────────
         const TelegramMigrations = require('./TelegramMigrations');
         await TelegramMigrations.run();
+        const LinkImportMigrations = require('./LinkImportMigrations');
+        await LinkImportMigrations.run();
 
         // ── Indexes for Multi-Tenant Performance ──────────────────────────────
         await p.query(`CREATE INDEX IF NOT EXISTS idx_accounts_user_id ON accounts(user_id)`).catch(() => {});

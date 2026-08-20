@@ -456,7 +456,14 @@ router.get   ("/telegram/links/export",                auth, TelegramController.
 router.post  ("/telegram/links/bulk-delete",           auth, TelegramController.bulkDeleteLinks.bind(TelegramController));
 router.post  ("/telegram/links/bulk-copy",             auth, TelegramController.bulkCopyLinks.bind(TelegramController));
 router.patch ("/telegram/links/:id",                   auth, TelegramController.updateLinkStatus.bind(TelegramController));
-router.delete("/telegram/links/:id",                   auth, TelegramController.deleteLink.bind(TelegramController));
+router.delete("/telegram/links/:id",                auth, TelegramController.deleteLink.bind(TelegramController));
+router.get   ("/telegram/link-import/links",             auth, TelegramController.listImportedLinks.bind(TelegramController));
+router.post  ("/telegram/link-import/word",              auth, TelegramController.importWordLinks.bind(TelegramController));
+router.post  ("/telegram/link-import/tasks",             auth, TelegramController.createImportTask.bind(TelegramController));
+router.get   ("/telegram/link-import/tasks/:taskId",     auth, TelegramController.getImportDashboard.bind(TelegramController));
+router.patch ("/telegram/link-import/tasks/:taskId",     auth, TelegramController.controlImportTask.bind(TelegramController));
+router.post  ("/telegram/link-import/operations/:operationId/retry", auth, TelegramController.retryImportOperation.bind(TelegramController));
+router.get   ("/telegram/link-import/export",            auth, TelegramController.exportImportedLinks.bind(TelegramController));
 
 // ── استقبال رسائل خارجية (بدون مصادقة JWT — تأمين بـ secret) ──────────────
 // يُستخدم من سكريبت Python (telethon/pyrogram) أو أي Telegram bot

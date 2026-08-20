@@ -336,7 +336,7 @@ async function bootstrap() {
         // تسجيل handlers قبل start()
         _registerQueueHandlers();
         await QueueManager.start();
-        logger.info('[Phase4] QueueManager started. Queues: wa-campaigns, wa-sync, wa-notifications');
+        logger.info('[Phase4] QueueManager started. Queues: wa-campaigns, wa-sync, wa-notifications, wa-link-imports');
         const KeywordMonitoringService = require('./src/api/services/KeywordMonitoringService');
         await KeywordMonitoringService.startWorker();
         logger.info('[KeywordWorker] Durable keyword processing worker started.');
@@ -443,6 +443,12 @@ function _registerQueueHandlers() {
         }
     });
 
+    // ── Link Import Operations ────────────────────────────────────────────────
+    QueueManager.registerHandler(QUEUES.LINK_IMPORTS, 'process_link_import_operation', async (job) => {
+        const LinkImportService = require('./src/api/services/LinkImportService');
+        await LinkImportService.processOperation(job.data);
+    });
+
     // ── Notifications ─────────────────────────────────────────────────────────
     QueueManager.registerHandler(QUEUES.NOTIFICATIONS, 'send_notification', async (job) => {
         const { type, title, message: msg, userId } = job.data;
@@ -458,7 +464,7 @@ function _registerQueueHandlers() {
         }
     });
 
-    logger.info('[Phase4] Queue handlers registered: send_campaign_message, send_private_message, sync_groups, send_notification');
+    logger.info('[Phase4] Queue handlers registered: send_campaign_message, send_private_message, sync_groups, process_link_import_operation, send_notification');
 }
 
 // ── Start HTTP server FIRST (serves static files immediately) ─────────────────
