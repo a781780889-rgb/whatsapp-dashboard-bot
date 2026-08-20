@@ -106,7 +106,7 @@ router.get('/admin/accounts/:id/qr-debug', auth, role('admin'), async (req, res)
 //  ACCOUNTS
 // ══════════════════════════════════════════════════════
 const AccountController = require('./controllers/AccountController');
-const { requireAccountOwnership, requireRequestedAccountOwnership, requireTelegramAccountOwnership } = require('./middleware/accountOwnership');
+const { requireAccountOwnership, requireTelegramAccountOwnership } = require('./middleware/accountOwnership');
 
 router.post('/accounts',                   auth, subscriptionCheck, accountLimitCheck, AccountController.createAccount.bind(AccountController));
 router.get('/accounts',                    auth, subscriptionCheck, listAccountsLimiter, AccountController.listAccounts.bind(AccountController));
@@ -182,140 +182,6 @@ router.post('/accounts/:accountId/campaigns/:campaignId/start', auth, CampaignCo
 router.post('/accounts/:accountId/campaigns/:campaignId/pause', auth, CampaignController.pauseCampaign.bind(CampaignController));
 router.get('/accounts/:accountId/campaigns/:campaignId/stats',  auth, CampaignController.getStats.bind(CampaignController));
 router.get('/accounts/:accountId/campaigns',                    auth, CampaignController.listCampaigns.bind(CampaignController));
-
-// ══════════════════════════════════════════════════════
-//  LINKS — الجزء الثالث: نظام مراقبة الروابط المتقدم
-// ══════════════════════════════════════════════════════
-const LinkController = require('./controllers/LinkController');
-// قراءة الروابط والإحصائيات
-router.get('/accounts/:accountId/links',                      auth, LinkController.getLinks.bind(LinkController));
-router.get('/accounts/:accountId/links/stats',                auth, LinkController.getStats.bind(LinkController));
-router.get('/accounts/:accountId/links/categories',           auth, LinkController.getCategories.bind(LinkController));
-router.get('/accounts/:accountId/links/export/csv',           auth, LinkController.exportCSV.bind(LinkController));
-
-// حذف / تصنيف
-router.delete('/accounts/:accountId/links/:linkId',           auth, LinkController.deleteLink.bind(LinkController));
-router.patch('/accounts/:accountId/links/:linkId/spam',       auth, LinkController.markSpam.bind(LinkController));
-router.post('/accounts/:accountId/links/categories',          auth, async (req, res) => res.status(501).json({ success: false, error: 'Not implemented' }));
-router.patch('/accounts/:accountId/links/:linkId/categorize', auth, async (req, res) => res.status(501).json({ success: false, error: 'Not implemented' }));
-
-// انضمام تلقائي — نقطة الاتصال الجديدة (الجزء الثالث)
-router.post('/accounts/:accountId/links/auto-join/bulk',      auth, LinkController.bulkAutoJoin.bind(LinkController));
-router.get('/accounts/:accountId/links/auto-join/queue',      auth, LinkController.getJoinQueue.bind(LinkController));
-router.delete('/accounts/:accountId/links/auto-join/queue',   auth, LinkController.clearJoinQueue.bind(LinkController));
-// رابط توافقي قديم
-router.post('/accounts/:accountId/links/:linkId/auto-join',   auth, LinkController.autoJoinLinks.bind(LinkController));
-
-// محرك المراقبة
-router.get('/accounts/:accountId/links/monitor/status',       auth, LinkController.getMonitorStatus.bind(LinkController));
-
-// Link Settings
-const LinkSettingsController = require('./controllers/LinkSettingsController');
-router.get('/accounts/:accountId/link-settings/search', auth, LinkSettingsController.getSearchSettings.bind(LinkSettingsController));
-router.put('/accounts/:accountId/link-settings/search', auth, LinkSettingsController.updateSearchSettings.bind(LinkSettingsController));
-router.get('/accounts/:accountId/link-settings/join',   auth, LinkSettingsController.getJoinSettings.bind(LinkSettingsController));
-router.put('/accounts/:accountId/link-settings/join',   auth, LinkSettingsController.updateJoinSettings.bind(LinkSettingsController));
-router.post('/accounts/:accountId/link-settings/import', auth, LinkSettingsController.importLinks.bind(LinkSettingsController));
-
-// ══════════════════════════════════════════════════════
-//  LINK SCAN ENGINE — البحث التلقائي والانضمام الاحترافي
-// ══════════════════════════════════════════════════════
-const LinkScanController = require('./controllers/LinkScanController');
-
-// بدء / إيقاف / حالة الفحص
-router.post('/accounts/:accountId/links/scan/start',      auth, LinkScanController.startScan.bind(LinkScanController));
-router.post('/accounts/:accountId/links/scan/stop',       auth, LinkScanController.stopScan.bind(LinkScanController));
-router.post('/accounts/:accountId/links/scan/pause',      auth, LinkScanController.pauseScan.bind(LinkScanController));
-router.post('/accounts/:accountId/links/scan/resume',     auth, LinkScanController.resumeScan.bind(LinkScanController));
-router.post('/accounts/:accountId/links/scan/retry',      auth, LinkScanController.retryScan.bind(LinkScanController));
-router.get('/accounts/:accountId/links/scan/status',      auth, LinkScanController.getScanStatus.bind(LinkScanController));
-router.get('/links/scan/all-status',                      auth,           LinkScanController.getAllScanStatus.bind(LinkScanController));
-router.post('/links/scan/start-all',                      auth,           LinkScanController.startScanAll.bind(LinkScanController));
-
-// الروابط المكتشفة
-router.get('/accounts/:accountId/links/discovered',               auth, LinkScanController.getDiscoveredLinks.bind(LinkScanController));
-router.get('/accounts/:accountId/links/discovered/stats',         auth, LinkScanController.getDiscoveredStats.bind(LinkScanController));
-router.get('/accounts/:accountId/links/discovered/export/csv',    auth, LinkScanController.exportDiscoveredCSV.bind(LinkScanController));
-router.get('/accounts/:accountId/links/discovered/export/:format', auth, LinkScanController.exportDiscovered.bind(LinkScanController));
-router.delete('/accounts/:accountId/links/discovered/duplicates', auth, LinkScanController.deleteDuplicates.bind(LinkScanController));
-router.delete('/accounts/:accountId/links/discovered/cleanup',    auth, LinkScanController.cleanupDisabledLinks.bind(LinkScanController));
-router.delete('/accounts/:accountId/links/discovered/:linkId',    auth, LinkScanController.deleteDiscoveredLink.bind(LinkScanController));
-router.patch('/accounts/:accountId/links/discovered/:linkId/status', auth, LinkScanController.updateLinkStatus.bind(LinkScanController));
-
-// الانضمام
-router.post('/accounts/:accountId/links/discovered/join',   auth, LinkScanController.joinDiscoveredLinks.bind(LinkScanController));
-router.post('/accounts/:accountId/links/discovered/import', auth, LinkScanController.importLinks.bind(LinkScanController));
-
-// سجل الانضمام
-router.get('/accounts/:accountId/links/join-history', auth, LinkScanController.getJoinHistory.bind(LinkScanController));
-
-// إعدادات الانضمام
-router.get('/accounts/:accountId/links/join-settings', auth, LinkScanController.getJoinSettings.bind(LinkScanController));
-router.put('/accounts/:accountId/links/join-settings', auth, LinkScanController.updateJoinSettings.bind(LinkScanController));
-
-// ══════════════════════════════════════════════════════
-//  LINK JOIN SYSTEM — نظام الانضمام بالروابط (متعدد الحسابات)
-// ══════════════════════════════════════════════════════
-const LinkImportController = require('./controllers/LinkImportController');
-const AutoSearchController = require('./controllers/AutoSearchController');
-
-// Apply tenant validation before every link-import endpoint, including the
-// account selector and job-control routes.
-router.use('/links/import', auth, requireRequestedAccountOwnership);
-
-router.post('/links/import/files', auth, LinkImportController.import.bind(LinkImportController));
-router.get('/links/import/files', auth, LinkImportController.files.bind(LinkImportController));
-router.get('/links/import/files/:fileId', auth, LinkImportController.file.bind(LinkImportController));
-router.post('/links/import/files/:fileId/reprocess', auth, LinkImportController.reprocess.bind(LinkImportController));
-router.get('/links/import/accounts', auth, LinkImportController.accounts.bind(LinkImportController));
-router.get('/links/import/settings', auth, LinkImportController.settings.bind(LinkImportController));
-router.put('/links/import/settings', auth, LinkImportController.saveSettings.bind(LinkImportController));
-router.post('/links/import/start', auth, LinkImportController.start.bind(LinkImportController));
-router.post('/links/import/jobs/:jobId/accounts/:targetAccountId/pause', auth, LinkImportController.pauseAccount.bind(LinkImportController));
-router.post('/links/import/jobs/:jobId/accounts/:targetAccountId/resume', auth, LinkImportController.resumeAccount.bind(LinkImportController));
-router.get('/links/import/jobs', auth, LinkImportController.jobs.bind(LinkImportController));
-router.get('/links/import/jobs/:jobId', auth, LinkImportController.job.bind(LinkImportController));
-router.post('/links/import/jobs/:jobId/:action', auth, LinkImportController.control.bind(LinkImportController));
-// Automatic link search — validate every accountId/accountIds supplied by the client
-router.use('/auto-search', auth, requireRequestedAccountOwnership);
-router.get('/auto-search/dashboard', auth, AutoSearchController.dashboard.bind(AutoSearchController));
-router.get('/auto-search/accounts', auth, AutoSearchController.accounts.bind(AutoSearchController));
-router.post('/auto-search/start', auth, AutoSearchController.start.bind(AutoSearchController));
-router.post('/auto-search/scan-now', auth, AutoSearchController.scanNow.bind(AutoSearchController));
-router.post('/auto-search/:action', auth, AutoSearchController.control.bind(AutoSearchController));
-router.get('/auto-search/settings', auth, AutoSearchController.dashboard.bind(AutoSearchController));
-router.post('/auto-search/settings', auth, AutoSearchController.settings.bind(AutoSearchController));
-router.get('/auto-search/links', auth, AutoSearchController.links.bind(AutoSearchController));
-router.get('/auto-search/health', auth, AutoSearchController.health.bind(AutoSearchController));
-router.get('/auto-search/export', auth, AutoSearchController.export.bind(AutoSearchController));
-router.post('/auto-search/copy', auth, AutoSearchController.copy.bind(AutoSearchController));
-
-const LinkJoinController = require('./controllers/LinkJoinController');
-
-// لوحة التحكم الرئيسية والإحصائيات
-router.get('/links/join/dashboard',        auth, LinkJoinController.getDashboard.bind(LinkJoinController));
-
-// الروابط
-router.get('/links/join/all-links',        auth, LinkJoinController.getAllLinks.bind(LinkJoinController));
-router.get('/links/join/joined-links',     auth, LinkJoinController.getJoinedLinks.bind(LinkJoinController));
-router.get('/links/join/unjoined-links',   auth, LinkJoinController.getUnjoinedLinks.bind(LinkJoinController));
-router.get('/links/join/history',          auth, LinkJoinController.getJoinHistory.bind(LinkJoinController));
-
-// تنفيذ الانضمام
-router.post('/links/join/execute',         auth, LinkJoinController.executeJoin.bind(LinkJoinController));
-router.post('/links/join/add-links',       auth, LinkJoinController.addLinks.bind(LinkJoinController));
-router.get('/links/join/job/:jobId',       auth, LinkJoinController.getJobStatus.bind(LinkJoinController));
-
-// حذف وتحديث
-router.post('/links/join/delete',          auth, LinkJoinController.deleteLinks.bind(LinkJoinController));
-router.patch('/links/join/:accountId/:linkId/status', auth, LinkJoinController.updateLinkStatus.bind(LinkJoinController));
-
-// الوضع التلقائي
-router.get('/links/join/auto-mode',              auth, LinkJoinController.getAutoMode.bind(LinkJoinController));
-router.post('/links/join/auto-mode/start',       auth, LinkJoinController.startAutoMode.bind(LinkJoinController));
-router.post('/links/join/auto-mode/stop',        auth, LinkJoinController.stopAutoMode.bind(LinkJoinController));
-router.get('/links/join/auto-settings',          auth, LinkJoinController.getAutoSettings.bind(LinkJoinController));
-router.put('/links/join/auto-settings',          auth, LinkJoinController.updateAutoSettings.bind(LinkJoinController));
 
 // ══════════════════════════════════════════════════════
 //  BROADCAST — FIX: use actual method names
@@ -520,25 +386,6 @@ router.get   ('/keywords/health', auth, KWController.getHealth.bind(KWController
 router.get   ('/keywords/accounts', auth, KWController.getAccounts.bind(KWController));
 router.patch ('/keyword-alerts/:id/flag', auth, KWController.setFlag.bind(KWController));
 router.post  ('/keyword-alerts/:id/reply', auth, KWController.sendReply.bind(KWController));
-
-// ══════════════════════════════════════════════════════
-//  GROUP NUMBERS
-// ══════════════════════════════════════════════════════
-const GroupNumberController = require('./controllers/GroupNumberController');
-router.get('/group-numbers/accounts', auth, GroupNumberController.accounts.bind(GroupNumberController));
-router.post('/group-numbers/jobs', auth, GroupNumberController.start.bind(GroupNumberController));
-router.get('/group-numbers/jobs', auth, GroupNumberController.jobs.bind(GroupNumberController));
-router.get('/group-numbers/jobs/latest', auth, GroupNumberController.latest.bind(GroupNumberController));
-router.get('/group-numbers/jobs/:id', auth, GroupNumberController.job.bind(GroupNumberController));
-router.get('/group-numbers/jobs/:id/activity', auth, GroupNumberController.activity.bind(GroupNumberController));
-router.patch('/group-numbers/jobs/:id', auth, GroupNumberController.control.bind(GroupNumberController));
-router.get('/group-numbers/numbers', auth, GroupNumberController.numbers.bind(GroupNumberController));
-router.get('/group-numbers/numbers/:id', auth, GroupNumberController.number.bind(GroupNumberController));
-router.delete('/group-numbers/numbers', auth, GroupNumberController.deleteNumbers.bind(GroupNumberController));
-router.post('/group-numbers/organize', auth, GroupNumberController.organize.bind(GroupNumberController));
-router.get('/group-numbers/stats', auth, GroupNumberController.stats.bind(GroupNumberController));
-router.get('/group-numbers/countries', auth, GroupNumberController.countries.bind(GroupNumberController));
-router.get('/group-numbers/export.csv', auth, GroupNumberController.exportCsv.bind(GroupNumberController));
 
 // ══════════════════════════════════════════════════════
 //  AI AUTOMATION CENTER

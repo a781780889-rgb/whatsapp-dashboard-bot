@@ -45,7 +45,6 @@ whatsapp-bot-dashboard/
 | `/ad-library` | مكتبة الإعلانات |
 | `/direct-publish` | النشر المباشر |
 | `/schedules` | النشر المجدول |
-| `/links` | مراقبة الروابط |
 
 ## تشغيل محلي
 

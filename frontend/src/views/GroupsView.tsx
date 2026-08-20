@@ -708,7 +708,6 @@ function TabSend({ group, onOpenPublish }: { group: WaGroup; onOpenPublish: () =
 function TabAuto({ group }: { group: WaGroup }) {
   const canAutomate = group.is_admin;
   const automations = [
-    { id: 'links',   icon: Link2,         label: 'مراقبة الروابط',    desc: 'رصد وحذف الروابط المحظورة', enabled: false, needsAdmin: true  },
     { id: 'reply',   icon: MessageSquare, label: 'الرد التلقائي',     desc: 'الرد على كلمات مفتاحية',    enabled: false, needsAdmin: false },
     { id: 'welcome', icon: Bell,          label: 'الترحيب التلقائي',  desc: 'رسالة ترحيب للأعضاء الجدد', enabled: false, needsAdmin: true  },
     { id: 'spam',    icon: Shield,        label: 'الحماية من السبام', desc: 'حذف الرسائل المزعجة',       enabled: false, needsAdmin: true  },

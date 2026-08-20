@@ -343,9 +343,6 @@ class WhatsAppManager {
             for (const msg of messages) {
                 if (!msg.message) continue;
                 emit('new_message', { accountId, message: msg });
-                try { require('../api/services/AutoSearchService').ingestMessage(accountId, msg).catch(err => console.warn(`[AutoSearch] live message ${accountId}/${msg.key?.id || 'unknown'} failed: ${err.message}`)); } catch (err) { console.warn(`[AutoSearch] live message listener failed for ${accountId}: ${err.message}`); }
-                try { require('../api/services/LinkScanEngine').ingestHistory(accountId, { messages: [msg], phase: 'live' }).catch(err => console.warn(`[LinkScan] live message ${accountId}/${msg.key?.id || 'unknown'} failed: ${err.message}`)); } catch (err) { console.warn(`[LinkScan] live message listener failed for ${accountId}: ${err.message}`); }
-
                 // Keyword Center v2: persist the event immediately and let the
                 // independent worker analyze it. This is intentionally not gated
                 // by the dashboard or by group-only messages.
@@ -360,15 +357,6 @@ class WhatsAppManager {
                     }
                 }
             }
-        });
-
-        sock.ev.on('messaging-history.set', async (payload) => {
-              try {
-                require('../api/services/AutoSearchService').ingestHistory(accountId, payload).catch(err => console.warn(`[AutoSearch] history batch ${accountId} failed: ${err.message}`));
-              } catch (err) { console.warn(`[AutoSearch] history listener failed for ${accountId}: ${err.message}`); }
-              try {
-                require('../api/services/LinkScanEngine').ingestHistory(accountId, { ...payload, phase: 'history' }).catch(err => console.warn(`[LinkScan] history batch ${accountId} failed: ${err.message}`));
-              } catch (err) { console.warn(`[LinkScan] history listener failed for ${accountId}: ${err.message}`); }
         });
 
         // [PRIVATE-SEND-ACK-TRACKING] هذا المستمع آمن بالتصميم لأنه لا يفعل

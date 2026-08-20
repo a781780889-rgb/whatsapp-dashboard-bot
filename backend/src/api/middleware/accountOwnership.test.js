@@ -6,7 +6,7 @@ jest.mock('../../database/DatabaseManager', () => ({
 }));
 
 const DatabaseManager = require('../../database/DatabaseManager');
-const { requireAccountOwnership, requireRequestedAccountOwnership } = require('./accountOwnership');
+const { requireAccountOwnership } = require('./accountOwnership');
 
 function response() {
   return {
@@ -42,26 +42,4 @@ describe('account tenant isolation', () => {
     expect(res.status).toHaveBeenCalledWith(403);
   });
 
-  test('denies a request containing any account outside the tenant', async () => {
-    DatabaseManager.systemDB.all.mockResolvedValue([{ id: 'a1' }]);
-    const req = { query: {}, body: { accountIds: ['a1', 'b1'] }, user: { id: 'u1', role: 'user' } };
-    const res = response();
-    const next = jest.fn();
-
-    await requireRequestedAccountOwnership(req, res, next);
-
-    expect(next).not.toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(403);
-  });
-
-  test('allows admins to inspect explicitly selected accounts', async () => {
-    const req = { query: { accountId: 'b1' }, body: {}, user: { id: 'admin-1', role: 'admin' } };
-    const res = response();
-    const next = jest.fn();
-
-    await requireRequestedAccountOwnership(req, res, next);
-
-    expect(next).toHaveBeenCalledTimes(1);
-    expect(DatabaseManager.systemDB.all).not.toHaveBeenCalled();
-  });
 });

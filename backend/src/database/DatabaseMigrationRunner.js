@@ -32,6 +32,23 @@ const migrations = [
         name: 'migrate_ad_library_message_text_to_content',
         sql: `UPDATE ad_library SET content = COALESCE(message_text, '') WHERE content IS NULL OR content = ''`
     },
+    {
+        version: 5,
+        name: 'remove_deleted_link_feature_tables',
+        sql: `
+            DROP TABLE IF EXISTS link_import_join_history CASCADE;
+            DROP TABLE IF EXISTS link_import_events CASCADE;
+            DROP TABLE IF EXISTS link_import_account_state CASCADE;
+            DROP TABLE IF EXISTS link_import_item_runs CASCADE;
+            DROP TABLE IF EXISTS link_import_jobs CASCADE;
+            DROP TABLE IF EXISTS link_import_items CASCADE;
+            DROP TABLE IF EXISTS link_import_files CASCADE;
+            DROP TABLE IF EXISTS link_import_settings CASCADE;
+            DROP TABLE IF EXISTS link_join_settings CASCADE;
+            DROP TABLE IF EXISTS link_search_settings CASCADE;
+            DROP TABLE IF EXISTS join_queue CASCADE;
+        `
+    },
 ];
 
 const MigrationRunner = {

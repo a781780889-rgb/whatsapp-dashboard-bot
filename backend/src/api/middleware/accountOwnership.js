@@ -54,33 +54,6 @@ function userScope(req) {
   return { userId, admin: isAdmin(req) };
 }
 
-async function requireRequestedAccountOwnership(req, res, next) {
-  if (isAdmin(req)) return next();
-  const input = { ...(req.query || {}), ...(req.body || {}) };
-  const ids = [];
-  for (const value of [input.accountId, input.targetAccountId]) {
-    if (value && value !== 'all') ids.push(String(value));
-  }
-  if (Array.isArray(input.accountIds)) ids.push(...input.accountIds.map(String));
-  const uniqueIds = [...new Set(ids)];
-  if (!uniqueIds.length) return next();
-
-  const userId = currentUserId(req);
-  if (!userId) return res.status(401).json({ success: false, error: 'غير مصرح.' });
-  try {
-    const rows = await DatabaseManager.systemDB.all(
-      'SELECT id FROM accounts WHERE id = ANY($1) AND user_id = $2',
-      [uniqueIds, userId]
-    );
-    if (rows.length !== uniqueIds.length) {
-      return res.status(403).json({ success: false, error: 'يتضمن الطلب حسابًا لا تملكه.' });
-    }
-    return next();
-  } catch (error) {
-    console.error('[AccountOwnership] requested ids validation failed:', error.message);
-    return res.status(500).json({ success: false, error: 'تعذر التحقق من ملكية الحسابات.' });
-  }
-}
 
 async function requireTelegramAccountOwnership(req, res, next) {
   const accountId = req.params.id || req.params.accountId;
@@ -104,4 +77,4 @@ async function requireTelegramAccountOwnership(req, res, next) {
   }
 }
 
-module.exports = { ADMIN_ROLES, currentUserId, isAdmin, userScope, requireAccountOwnership, requireRequestedAccountOwnership, requireTelegramAccountOwnership };
+module.exports = { ADMIN_ROLES, currentUserId, isAdmin, userScope, requireAccountOwnership, requireTelegramAccountOwnership };

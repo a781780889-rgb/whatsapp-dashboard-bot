@@ -15,6 +15,20 @@ const SystemDB = {
     async init() {
         const p = getPool();
 
+        // Remove database objects belonging exclusively to features removed from the application.
+        await p.query(`CREATE TABLE IF NOT EXISTS system_migrations (version INT PRIMARY KEY, name TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+        const removedFeatureTables = await p.query(`SELECT 1 FROM system_migrations WHERE version = 5 LIMIT 1`);
+        if (!removedFeatureTables.rowCount) {
+            await p.query(`
+                DROP TABLE IF EXISTS group_number_activity CASCADE;
+                DROP TABLE IF EXISTS group_number_sources CASCADE;
+                DROP TABLE IF EXISTS group_numbers CASCADE;
+                DROP TABLE IF EXISTS group_number_jobs CASCADE;
+                INSERT INTO system_migrations (version, name) VALUES (5, 'remove_deleted_feature_tables')
+                ON CONFLICT (version) DO NOTHING;
+            `);
+        }
+
         // ── الجداول الأساسية أولاً (بدون foreign keys) ──────────────────────
         await p.query(`
             CREATE TABLE IF NOT EXISTS users (
@@ -309,82 +323,6 @@ const SystemDB = {
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
         `);
-
-        await p.query(`
-            CREATE TABLE IF NOT EXISTS group_number_jobs (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                user_id UUID NOT NULL,
-                account_ids JSONB NOT NULL DEFAULT '[]',
-                status VARCHAR(24) NOT NULL DEFAULT 'queued',
-                current_account_id UUID,
-                current_group_jid TEXT,
-                groups_total INT NOT NULL DEFAULT 0,
-                groups_scanned INT NOT NULL DEFAULT 0,
-                raw_members INT NOT NULL DEFAULT 0,
-                unique_numbers INT NOT NULL DEFAULT 0,
-                duplicate_numbers INT NOT NULL DEFAULT 0,
-                saudi_numbers INT NOT NULL DEFAULT 0,
-                admin_numbers INT NOT NULL DEFAULT 0,
-                errors_count INT NOT NULL DEFAULT 0,
-                error TEXT,
-                started_at TIMESTAMPTZ,
-                finished_at TIMESTAMPTZ,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-        `);
-        await p.query(`CREATE INDEX IF NOT EXISTS idx_group_number_jobs_user ON group_number_jobs(user_id, created_at DESC)`).catch(() => {});
-        await p.query(`CREATE UNIQUE INDEX IF NOT EXISTS ux_group_number_jobs_active_user ON group_number_jobs(user_id) WHERE status IN ('queued','running','paused')`).catch(() => {});
-        await p.query(`
-            CREATE TABLE IF NOT EXISTS group_numbers (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                user_id UUID NOT NULL,
-                normalized_phone TEXT NOT NULL,
-                country_code TEXT,
-                country_name TEXT,
-                is_saudi BOOLEAN NOT NULL DEFAULT FALSE,
-                contact_name TEXT,
-                is_admin BOOLEAN NOT NULL DEFAULT FALSE,
-                first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                appearance_count INT NOT NULL DEFAULT 1,
-                source_count INT NOT NULL DEFAULT 1,
-                status VARCHAR(24) NOT NULL DEFAULT 'valid',
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                UNIQUE(user_id, normalized_phone)
-            )
-        `);
-        await p.query(`CREATE INDEX IF NOT EXISTS idx_group_numbers_filters ON group_numbers(user_id, is_saudi, is_admin, country_code)`).catch(() => {});
-        await p.query(`
-            CREATE TABLE IF NOT EXISTS group_number_sources (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                number_id UUID NOT NULL REFERENCES group_numbers(id) ON DELETE CASCADE,
-                user_id UUID NOT NULL,
-                account_id UUID NOT NULL,
-                group_jid TEXT NOT NULL,
-                group_name TEXT,
-                is_admin BOOLEAN NOT NULL DEFAULT FALSE,
-                first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                UNIQUE(number_id, account_id, group_jid)
-            )
-        `);
-        await p.query(`CREATE INDEX IF NOT EXISTS idx_group_number_sources_user ON group_number_sources(user_id, account_id, group_jid)`).catch(() => {});
-        await p.query(`
-            CREATE TABLE IF NOT EXISTS group_number_activity (
-                id BIGSERIAL PRIMARY KEY,
-                job_id UUID REFERENCES group_number_jobs(id) ON DELETE CASCADE,
-                user_id UUID NOT NULL,
-                account_id UUID,
-                group_jid TEXT,
-                event_type VARCHAR(40) NOT NULL,
-                message TEXT NOT NULL,
-                payload JSONB,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-        `);
-        await p.query(`CREATE INDEX IF NOT EXISTS idx_group_number_activity_job ON group_number_activity(job_id, created_at DESC)`).catch(() => {});
 
         await p.query(`
             CREATE TABLE IF NOT EXISTS ai_agents (

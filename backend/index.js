@@ -47,7 +47,6 @@ const QueueManager       = require('./src/lib/QueueManager');
 const DatabaseManager    = require('./src/database/DatabaseManager');
 const SystemDB           = require('./src/database/SystemDB');
 const WhatsAppManager    = require('./src/bot/WhatsAppManager');
-const LinkImportService  = require('./src/api/services/LinkImportService');
 const JobScheduler       = require('./src/scheduler/JobScheduler');
 const TelegramService    = require('./src/api/services/TelegramService');
 const AccountRoleEngine  = require('./src/api/services/AccountRoleEngine');
@@ -227,13 +226,6 @@ async function bootstrap() {
 
         // 3. [FIX-2] Inject Socket.IO — setIO يُهيِّئ SocketBridge أيضاً
         WhatsAppManager.setIO(io);
-        try {
-            const LinkScanEngine = require('./src/api/services/LinkScanEngine');
-            LinkScanEngine.setSocketIO(io);
-            logger.info('[LinkScan] Socket.IO bridge initialized for live scan updates.');
-        } catch (linkScanSocketErr) {
-            logger.warn({ err: linkScanSocketErr }, '[LinkScan] Socket.IO bridge initialization failed.');
-        }
 
         // [FIX-13] JWTService — حقن Redis للـ blacklist + family tracking
         try {
@@ -348,18 +340,10 @@ async function bootstrap() {
         const KeywordMonitoringService = require('./src/api/services/KeywordMonitoringService');
         await KeywordMonitoringService.startWorker();
         logger.info('[KeywordWorker] Durable keyword processing worker started.');
-        const GroupNumberService = require('./src/api/services/GroupNumberService');
-        await GroupNumberService.startWorker();
-        logger.info('[GroupNumberWorker] Durable group-number collection worker started.');
         const AIAutomationService = require('./src/api/services/AIAutomationService');
         await AIAutomationService.registerCoreEvents();
         await AIAutomationService.startWorker();
         logger.info('[AIWorker] AI automation worker and event bus started.');
-        await LinkImportService.startWorker();
-        logger.info('[LinkImportWorker] Persistent link import worker started.');
-        const AutoSearchService = require('./src/api/services/AutoSearchService');
-        await AutoSearchService.startWorker();
-        logger.info('[AutoSearchWorker] Persistent automatic search worker started.');
 
         // 6. Start AccountRoleEngine
         AccountRoleEngine.setDependencies(JobScheduler, WhatsAppManager);
@@ -394,12 +378,9 @@ function setupGracefulShutdown() {
             AccountRoleEngine.stop();
             await JobScheduler.stop();
             // [FIX-20] إيقاف QueueManager قبل RedisManager
-            LinkImportService.stopWorker();
             try { require('./src/api/services/KeywordMonitoringService').stopWorker(); } catch {}
             try { require('./src/api/services/TelegramAuthService').stopCleanup(); } catch {}
-            try { require('./src/api/services/GroupNumberService').stopWorker(); } catch {}
             try { require('./src/api/services/AIAutomationService').stopWorker(); } catch {}
-            try { require('./src/api/services/AutoSearchService').stopWorker(); } catch {}
             await QueueManager.stop();
             require('./src/api/services/GroupSyncService').stop();
             await DatabaseManager.closeAll();

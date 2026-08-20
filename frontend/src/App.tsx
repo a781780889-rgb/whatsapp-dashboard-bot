@@ -16,15 +16,10 @@ import DashboardHome from './views/DashboardHome';
 const AccountsView              = lazy(() => import('./views/AccountsView'));
 const CampaignsView             = lazy(() => import('./views/CampaignsView'));
 const GroupsView                = lazy(() => import('./views/GroupsView'));
-const LinkDashboardView         = lazy(() => import('./views/LinkDashboardView'));
-const LinkJoinView              = lazy(() => import('./views/LinkJoinView'));
-const LinkImportView             = lazy(() => import('./views/LinkImportView'));
-const AutoSearchView              = lazy(() => import('./views/AutoSearchView'));
 const ScheduleDashboardView     = lazy(() => import('./views/ScheduleDashboardView'));
 const AdLibraryView             = lazy(() => import('./views/AdLibraryView'));
 const AIAutomationView          = lazy(() => import('./views/AIAutomationView'));
 const KeywordMonitoringView     = lazy(() => import('./views/KeywordMonitoringView'));
-const GroupNumbersView           = lazy(() => import('./views/GroupNumbersView'));
 // Admin views
 const DiagnosticsDashboardView  = lazy(() => import('./views/DiagnosticsDashboardView'));
 const TelegramView              = lazy(() => import('./views/TelegramView'));
@@ -222,15 +217,10 @@ function AppInner() {
           <Route path="/campaigns"      element={<CampaignsView      accountId={selectedAccountId} />} />
 
           <Route path="/groups"         element={<GroupsView          accountId={selectedAccountId} />} />
-          <Route path="/links"          element={<LinkDashboardView    accountId={selectedAccountId} />} />
-          <Route path="/link-join"      element={<LinkJoinView          accountId={selectedAccountId} accounts={accounts} />} />
-          <Route path="/link-import"    element={<LinkImportView        accountId={selectedAccountId} accounts={accounts} />} />
-          <Route path="/auto-search"    element={<AutoSearchView         accountId={selectedAccountId} accounts={accounts} />} />
           <Route path="/schedules"      element={<ScheduleDashboardView accountId={selectedAccountId} accounts={accounts} />} />
           <Route path="/ad-library"     element={<AdLibraryView        accountId={selectedAccountId} />} />
           <Route path="/ai-automation" element={<AIAutomationView />} />
           <Route path="/keywords"      element={<KeywordMonitoringView userId={currentUser.id} />} />
-          <Route path="/group-numbers" element={<GroupNumbersView />} />
           <Route path="/diagnostics"   element={<DiagnosticsDashboardView accountId={selectedAccountId} />} />
 
           {/* Admin-only routes */}

@@ -5,7 +5,7 @@ import { CommandPalette, type CommandItem } from '@/components/ui/command-palett
 import { usePageMotion } from '@/hooks/usePageMotion';
 import {
   LayoutDashboard, Users, Library, Calendar, Megaphone,
-  Link as LinkIcon, GitMerge, SearchCheck, Brain, Activity,
+  SearchCheck, Brain, Activity,
   BarChart3, CreditCard, Monitor, MessageCircle,
 } from 'lucide-react';
 
@@ -39,8 +39,6 @@ export function AppLayout({
       { id: 'schedules',  label: 'النشر المجدول',        section: 'النشر',  icon: Calendar,        to: '/schedules' },
       { id: 'campaigns',  label: 'الحملات',              section: 'النشر',  icon: Megaphone,       to: '/campaigns' },
       { id: 'groups',     label: 'المجموعات',            section: 'النشر',  icon: Users,           to: '/groups' },
-      { id: 'links',      label: 'مراقبة الروابط',       section: 'الروابط', icon: LinkIcon,        to: '/links' },
-      { id: 'link-join',  label: 'الانضمام بالروابط',    section: 'الروابط', icon: GitMerge,        to: '/link-join' },
       { id: 'keywords',   label: 'الكلمات المفتاحية',    section: 'الروابط', icon: SearchCheck,     to: '/keywords' },
       { id: 'ai',         label: 'مركز الذكاء والأتمتة', section: 'الذكاء الاصطناعي', icon: Brain, to: '/ai-automation' },
       { id: 'diagnostics',label: 'لوحة التشخيص',         section: 'التشخيص', icon: Activity,        to: '/diagnostics' },
